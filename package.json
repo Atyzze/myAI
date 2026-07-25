@@ -1,0 +1,22 @@
+{
+  "name": "myai-voice-notes",
+  "version": "36.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zero-install voice-note PWA with self-hosted server transcription and replies.",
+  "scripts": {
+    "test": "node tests/run-baseline.mjs",
+    "test:portable": "node tests/run-baseline.mjs --portable",
+    "version:sync": "node -e \"const fs=require('fs');const m=fs.readFileSync('sw.js','utf8').match(/const VERSION\\s*=\\s*'v(\\d+)'/);if(!m)throw new Error('no VERSION in sw.js');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=m[1]+'.0.0';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n');console.log('package.json version set to '+p.version)\"",
+    "test:unit": "node tests/unit/pure.test.mjs && node tests/unit/core.test.mjs && node tests/unit/recording-lock.test.mjs && node tests/unit/live-view.test.mjs && node tests/unit/platform.test.mjs && node tests/unit/webm-duration.test.mjs && node tests/unit/sw-routing.test.mjs && node tests/unit/baseline-runner.test.mjs && node tests/unit/baseline-contract.test.mjs && node tests/unit/static.test.mjs && node tests/check-syntax.mjs",
+    "test:integration": "MYAI_STRICT_TESTS=1 node tests/integration/multitab-integration.mjs && MYAI_STRICT_TESTS=1 node tests/integration/webm-player-integration.mjs && MYAI_STRICT_TESTS=1 node tests/integration/browser-integration.mjs",
+    "test:multitab": "node tests/integration/multitab-integration.mjs",
+    "test:browser": "node tests/integration/browser-integration.mjs",
+    "test:mutation": "node tests/mutation/mutation-smoke.mjs",
+    "verify:baseline": "node tests/run-baseline.mjs",
+    "check": "npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

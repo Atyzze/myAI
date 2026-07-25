@@ -1,105 +1,147 @@
 /* ==========================================================================
-   sw.js — Service worker for offline support.
+   sw.js - Atomic offline application shell for the server-only client.
 
-   • App shell (same-origin, all first-party JS): cache-first, so the UI loads
-     with no network.
-   • Cross-origin (transformers.js from jsDelivr + the Whisper/distilbart model
-     weights from the HF CDN): stale-while-revalidate, so they work offline after
-     first use. This is the only third-party code the app loads, and only when
-     on-device transcription/reply is used.
-   • Non-GET requests are NOT intercepted — POSTs to /transcribe and /ollama
-     pass straight through to the network.
+   API routes and unknown same-origin GETs remain network-owned. Activation also
+   removes legacy model caches left by earlier on-device-AI releases.
 
-   Cache versioning: bump VERSION whenever the shell assets change so clients
-   pick them up instead of mixing old and new modules. The model lives in
-   RUNTIME_CACHE, which is intentionally NOT versioned here — re-downloading a
-   multi-hundred-MB model on every app update would be hostile. Old shell caches
-   are pruned on activate.
+   THE VERSION BELOW IS THE ONLY PLACE THE APPLICATION VERSION IS WRITTEN.
+   It lives here for two reasons that no other file can satisfy:
+
+     1. This script's bytes are what the browser compares on every update check.
+        A version declared elsewhere can change without this file changing, and
+        then nothing updates at all - the shell below is served cache-first, so
+        the browser would keep handing out the previous build forever.
+     2. It names the cache that actually serves the GUI, so it is the only value
+        that can honestly answer "which build am I looking at?". The label in the
+        corner of the app asks this worker for it (see src/js/version.js) rather
+        than carrying a copy that a stale cache would happily keep showing.
+
+   Bump it here, then run `npm run version:sync` to carry the number into
+   package.json. Nothing else needs editing, and the release gate fails if
+   anything else declares a version of its own.
    ========================================================================== */
 
-const VERSION       = 'v4';                      // ← bump on any shell asset change
-const SHELL_CACHE   = `myai-shell-${VERSION}`;
-const RUNTIME_CACHE = 'myai-runtime-v1';         // keep stable: holds large model weights
+const VERSION     = 'v36';
+const SHELL_CACHE = `myai-shell-${VERSION}`;
 
 const SHELL = [
-    './',
     './index.html',
     './manifest.webmanifest',
-    './snek.jpg',
-    './icon-192.png',
-    './icon-512.png',
-    './icon-maskable-512.png',
-    './js/main.js',
-    './js/config.js',
-    './js/db.js',
-    './js/audio.js',
-    './js/ai-worker.js',
-    './js/dedup.js',
-    './js/jobs.js',
-    './js/recorder.js',
-    './js/transcribe.js',
-    './js/transcribe-core.js',     // pure transcript-assembly core (unit-tested)
-    './js/reply.js',
-    './js/auto-pipeline.js',
-    './js/live-tabs.js',
-    './js/settings.js',
-    './js/gui.js',
-    './js/idb-min.js',             // hand-written IndexedDB wrapper (replaces idb)
-    './js/wake-lock.js'            // native screen wake lock (replaces NoSleep)
+    './assets/icon-192.png',
+    './assets/icon-512.png',
+    './src/js/main.js',
+    './src/js/config.js',
+    './src/js/version.js',
+    './src/js/db.js',
+    './src/js/audio.js',
+    './src/js/audio-format.js',
+    './src/js/webm-duration.js',
+    './src/js/player-core.js',
+    './src/js/dedup.js',
+    './src/js/jobs.js',
+    './src/js/recording-lock.js',
+    './src/js/recorder.js',
+    './src/js/transcribe.js',
+    './src/js/transcribe-core.js',
+    './src/js/reply.js',
+    './src/js/reply-core.js',
+    './src/js/auto-pipeline.js',
+    './src/js/live-tabs.js',
+    './src/js/live-view.js',
+    './src/js/live-render.js',
+    './src/js/live-inline.js',
+    './src/js/settings.js',
+    './src/js/gui.js',
+    './src/js/naming.js',
+    './src/js/help.js',
+    './src/js/idb-min.js',
+    './src/js/wake-lock.js'
 ];
 
-self.addEventListener('install', (event) => {
-    event.waitUntil(
-        caches.open(SHELL_CACHE)
-            // Tolerate individual 404s so install never hard-fails the whole shell.
-            .then(cache => Promise.allSettled(SHELL.map(url => cache.add(url))))
-            .then(() => self.skipWaiting())
-    );
+const SHELL_URLS = new Set(SHELL.map(path => new URL(path, self.registration.scope).href));
+
+/* Same-origin routes that are proxied to the self-hosted services and must never
+   be intercepted or cached. These mirror CONFIG.OLLAMA_URL and
+   CONFIG.TRANSCRIBE_URL; tests/unit/static.test.mjs asserts they stay in sync,
+   because a service worker cannot import the application config.
+
+   Matching is exact-or-prefixed. The previous check only tested for a trailing
+   slash, so the transcription route as actually configured ('/transcribe') did
+   not match its own guard. */
+const API_ROUTES = ['/ollama', '/transcribe'];
+const isApiRoute = pathname =>
+    API_ROUTES.some(route => pathname === route || pathname.startsWith(route + '/'));
+const isLegacyModelCache = key => {
+    const normalized = String(key || '').toLowerCase();
+    return normalized.startsWith('myai-runtime-') || normalized.includes('transformers');
+};
+
+self.addEventListener('install', event => {
+    event.waitUntil((async () => {
+        const cache = await caches.open(SHELL_CACHE);
+        await cache.addAll(SHELL);
+        await self.skipWaiting();
+    })());
 });
 
-self.addEventListener('activate', (event) => {
-    event.waitUntil(
-        caches.keys()
-            .then(keys => Promise.all(
-                // Drops stale shells (e.g. myai-shell-v1) but keeps the current
-                // shell and the runtime/model cache.
-                keys.filter(k => k !== SHELL_CACHE && k !== RUNTIME_CACHE)
-                    .map(k => caches.delete(k))
-            ))
-            .then(() => self.clients.claim())
-    );
+self.addEventListener('activate', event => {
+    event.waitUntil((async () => {
+        const keys = await caches.keys();
+        const staleKeys = keys.filter(key =>
+            (key.startsWith('myai-shell-') && key !== SHELL_CACHE) || isLegacyModelCache(key)
+        );
+        await Promise.all(staleKeys.map(key => caches.delete(key)));
+        await self.clients.claim();
+
+        if (staleKeys.some(isLegacyModelCache) && self.clients.matchAll) {
+            const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+            for (const client of clients) client.postMessage({ type: 'legacy-model-cache-cleared' });
+        }
+    })());
 });
 
-self.addEventListener('fetch', (event) => {
-    const req = event.request;
+async function cacheFirstShell(request) {
+    const cache = await caches.open(SHELL_CACHE);
+    const cached = await cache.match(request);
+    if (cached) return cached;
 
-    // Never touch POST/PUT/etc. — lets /transcribe and /ollama reach the network.
-    if (req.method !== 'GET') return;
+    const response = await fetch(request);
+    if (response && response.ok) await cache.put(request, response.clone()).catch(() => {});
+    return response;
+}
 
-    const url = new URL(req.url);
+async function navigationResponse(request) {
+    try {
+        const response = await fetch(request);
+        if (response && response.ok) return response;
+    } catch (_) {}
+    const cache = await caches.open(SHELL_CACHE);
+    return cache.match(new URL('./index.html', self.registration.scope).href);
+}
 
-    if (url.origin === self.location.origin) {
-        // App shell: cache-first, fall back to network (and backfill the cache).
-        event.respondWith(
-            caches.match(req).then(cached => cached || fetch(req).then(res => {
-                const copy = res.clone();
-                caches.open(SHELL_CACHE).then(c => c.put(req, copy)).catch(() => {});
-                return res;
-            }).catch(() => cached))
-        );
-    } else {
-        // Cross-origin lib + model: stale-while-revalidate.
-        event.respondWith(
-            caches.open(RUNTIME_CACHE).then(async (cache) => {
-                const cached  = await cache.match(req);
-                const network = fetch(req).then(res => {
-                    if (res && (res.ok || res.type === 'opaque')) {
-                        cache.put(req, res.clone()).catch(() => {});
-                    }
-                    return res;
-                }).catch(() => cached);
-                return cached || network;
-            })
-        );
+/* The GUI's version label. Answering from here means the number on screen is
+   the version of the shell that served the page, not of the source tree someone
+   believes is deployed: if this worker is stale, the label says so. */
+self.addEventListener('message', event => {
+    const data = event.data;
+    if (!data || data.type !== 'version') return;
+    const reply = { type: 'version', version: VERSION };
+    const port = event.ports && event.ports[0];
+    if (port) port.postMessage(reply);
+    else if (event.source) event.source.postMessage(reply);
+});
+
+self.addEventListener('fetch', event => {
+    const request = event.request;
+    if (request.method !== 'GET') return;
+
+    const url = new URL(request.url);
+    if (url.origin !== self.location.origin) return;
+
+    if (isApiRoute(url.pathname)) return;
+    if (request.mode === 'navigate') {
+        event.respondWith(navigationResponse(request));
+        return;
     }
+    if (SHELL_URLS.has(url.href)) event.respondWith(cacheFirstShell(request));
 });

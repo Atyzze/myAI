@@ -1,0 +1,406 @@
+{
+  "schemaVersion": 1,
+  "baseline": "myAI-v30",
+  "strictCommand": "npm test",
+  "portableCommand": "npm run test:portable",
+  "rules": {
+    "strictSkipsAllowed": false,
+    "allContractsRequireExecutableSuites": true,
+    "criticalContractsRequireMutationGuard": true
+  },
+  "contracts": [
+    {
+      "id": "REC-LOCK-001",
+      "severity": "critical",
+      "title": "Only one tab may own recording/finalization",
+      "acceptance": "A second independent tab or realm is denied until the active owner fully releases the global lock; nested ownership remains held until the final release.",
+      "suites": [
+        "recording-lock-unit",
+        "multitab-realms",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-LOCK-SPLIT-BRAIN",
+        "MUT-LOCK-FALLBACK-VERIFY"
+      ]
+    },
+    {
+      "id": "REC-SESSION-001",
+      "severity": "critical",
+      "title": "Audio fragments are isolated by capture session",
+      "acceptance": "Two streams using identical recording and sequence coordinates retain separate rows and cannot overwrite or merge across session IDs.",
+      "suites": [
+        "browser-lifecycle",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-SESSION-INDEX"
+      ]
+    },
+    {
+      "id": "REC-LIVE-001",
+      "severity": "high",
+      "title": "Live recording state remains integrated and synchronized",
+      "acceptance": "The owner sees exactly one green live row with its ticking timer and LIVE badge; other tabs see the same protected row with an OTHER TAB label, and no duplicate global header status is rendered.",
+      "suites": [
+        "browser-lifecycle",
+        "static-integrity"
+      ]
+    },
+    {
+      "id": "REC-LIFECYCLE-001",
+      "severity": "critical",
+      "title": "Start, flush, stop, playback and delete remain functional",
+      "acceptance": "A recording crosses a durable flush boundary, finalizes to a structurally valid playable file, removes only its own fragments, plays without media error and deletes cleanly.",
+      "suites": [
+        "browser-lifecycle",
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-WAV-ASSEMBLY"
+      ]
+    },
+    {
+      "id": "OPUS-SEEK-001",
+      "severity": "critical",
+      "title": "Downloaded Opus WebM has finite duration and desktop seeking",
+      "acceptance": "The remux writes finite Segment metadata, Duration, SeekHead and Cues while preserving decoded Opus audio; Chromium and ffprobe report finite duration and random seeking works.",
+      "suites": [
+        "webm-remux-unit",
+        "webm-desktop",
+        "browser-lifecycle",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-WEBM-PASSTHROUGH"
+      ]
+    },
+    {
+      "id": "OPUS-TRANSCRIBE-001",
+      "severity": "critical",
+      "title": "Long WebM/Opus recordings transcribe through bounded decode windows",
+      "acceptance": "WebM Cluster metadata is indexed without decoding the full recording; each transcription request creates an independently decodable finite window with timestamps rebased near zero, and recordings of at least two logical hours are accepted without a duration cutoff.",
+      "suites": [
+        "webm-remux-unit",
+        "webm-desktop",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-OPUS-WINDOWING"
+      ]
+    },
+    {
+      "id": "JOB-RACE-001",
+      "severity": "critical",
+      "title": "Late job cleanup cannot cancel or unregister a replacement",
+      "acceptance": "Replacing a transcription/reply job aborts the old controller and stale completion cannot remove the new controller.",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-JOB-IDENTITY"
+      ]
+    },
+    {
+      "id": "SW-CACHE-001",
+      "severity": "critical",
+      "title": "Offline shell updates are atomic and APIs are never cached",
+      "acceptance": "Incomplete shell installation fails, previous caches survive until a complete install, API and unknown same-origin routes remain network-owned, and legacy browser-model caches are removed during activation.",
+      "suites": [
+        "service-worker",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-SW-API-CACHE"
+      ]
+    },
+    {
+      "id": "SEC-RELEASE-001",
+      "severity": "high",
+      "title": "Release security and module integrity remain pinned",
+      "acceptance": "CSP excludes inline and third-party script execution, the browser-model worker is absent, module imports resolve, delegated actions are handled, and every shipped module is present in the service-worker shell.",
+      "suites": [
+        "static-integrity",
+        "syntax"
+      ]
+    },
+    {
+      "id": "AI-BOUNDARY-001",
+      "severity": "high",
+      "title": "Long AI/transcription inputs stay within explicit bounds",
+      "acceptance": "WAV and WebM/Opus transcription use bounded range windows, server prompt budgeting and multilingual overlap handling remain deterministic, and no arbitrary compressed-duration cutoff is introduced.",
+      "suites": [
+        "pure",
+        "transcript-core",
+        "webm-remux-unit",
+        "webm-desktop",
+        "static-integrity"
+      ]
+    },
+    {
+      "id": "SERVER-POOL-001",
+      "severity": "critical",
+      "title": "Server transcription keeps ten chunks in flight",
+      "acceptance": "Server transcription eagerly dispatches up to ten chunks at once, never exceeds ten active requests, processes every chunk exactly once, uses fewer workers for shorter recordings, and stops dispatching new work after the circuit breaker opens.",
+      "suites": [
+        "transcript-core",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-SERVER-POOL-WIDTH"
+      ]
+    },
+    {
+      "id": "SERVER-BACKUP-001",
+      "severity": "high",
+      "title": "Server transcription backup retention is explicit and optional",
+      "acceptance": "The browser defaults server backup storage to off, persists the setting, exposes it in Settings, and sends an explicit store_backup Boolean with every transcription chunk.",
+      "suites": [
+        "static-integrity"
+      ]
+    },
+    {
+      "id": "REC-FAILSAFE-001",
+      "severity": "critical",
+      "title": "Capture failures stop visibly and retain unsaved fragments",
+      "acceptance": "Any microphone, encoder or fragment-write failure immediately removes the live UI state, stops capture, alerts the user, retains uncommitted fragments through finalization and never claims bytes were saved without confirmation.",
+      "suites": [
+        "browser-lifecycle",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-CAPTURE-ERROR-CONTINUE"
+      ]
+    },
+    {
+      "id": "UI-AUDIO-STORAGE-001",
+      "severity": "high",
+      "title": "The recording screen shows audio capacity and fullness in stable units",
+      "acceptance": "The main storage line displays saved audio in MB, estimated remaining browser quota in GB, and audio fullness as saved audio divided by the browser-reported quota; every numeric value uses exactly two decimal places and the old app-origin/persistence labels remain absent.",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ]
+    },
+    {
+      "id": "TEST-BASELINE-001",
+      "severity": "critical",
+      "title": "The compatibility contract itself is executable",
+      "acceptance": "Every contract references registered suites, strict mode forbids skips, critical contracts have mutation guards, and the mutation suite proves selected regressions are detected.",
+      "suites": [
+        "baseline-runner-unit",
+        "baseline-contract",
+        "mutation-guards"
+      ],
+      "mutationGuards": [
+        "MUT-CONTRACT-MAPPING",
+        "MUT-RUNNER-SKIP"
+      ]
+    },
+    {
+      "id": "LIVE-VIEW-001",
+      "severity": "critical",
+      "title": "Live transcript and reply views actually render under the shipped CSP",
+      "acceptance": "Opening a live transcript log or reply stream produces a window that boots under the shipped Content-Security-Policy, replays everything already buffered, receives subsequent events live, and reports a visible failure instead of waiting indefinitely if it cannot start. No popup document depends on inline script.",
+      "suites": [
+        "live-view-unit",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-POPUP-INLINE-SCRIPT",
+        "MUT-POPUP-UNBOUNDED-WAIT"
+      ]
+    },
+    {
+      "id": "LIVE-STREAM-002",
+      "severity": "critical",
+      "title": "Re-initialising a live stream does not orphan an attached view",
+      "acceptance": "A live view opened before a stream is re-initialised continues to receive tokens, chunks and completion, because registry entries are reset in place rather than replaced; the view is told to clear the previous result instead of appending to it.",
+      "suites": [
+        "live-view-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-STREAM-REINIT-REPLACE"
+      ]
+    },
+    {
+      "id": "LIVE-VIEW-MOBILE-001",
+      "severity": "critical",
+      "title": "A live view works where a popup cannot",
+      "acceptance": "On a touch or small-screen client the live transcript and reply views render inside the tab that owns the stream, opening no second window, replaying the buffer on open and detaching when closed; a blocked popup falls back to the same in-page view; and a popup whose readiness cannot be polled because the opener may not inspect it still attaches when it announces itself by message.",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-VIEW-DESKTOP-ONLY",
+        "MUT-POPUP-READY-MESSAGE"
+      ]
+    },
+    {
+      "id": "TEST-HARNESS-001",
+      "severity": "critical",
+      "title": "The release harness is itself executable and its coverage is declared",
+      "acceptance": "Every expression a browser suite evaluates in the page is valid JavaScript, every shipped module is either exercised by a suite or explicitly listed as untested, and every shipped module is present in the offline service-worker shell.",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-HARNESS-BROKEN-EVAL",
+        "MUT-SHELL-OMIT-MODULE"
+      ]
+    },
+    {
+      "id": "AI-STREAM-001",
+      "severity": "critical",
+      "title": "Streamed replies survive arbitrary network framing",
+      "acceptance": "Newline-delimited reply objects are reassembled correctly when a read ends mid-object, when one read carries several objects, and when the final object arrives without a trailing newline; blank and unparseable lines are skipped rather than fatal, and a server-reported error is surfaced while retaining the text already received.",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-REPLY-STREAM-FRAMING"
+      ]
+    },
+    {
+      "id": "SW-ROUTE-002",
+      "severity": "critical",
+      "title": "Proxied service routes are excluded from the offline cache exactly as configured",
+      "acceptance": "The service worker declines to intercept both the exact configured service route and any subpath of it, the excluded routes match CONFIG.OLLAMA_URL and CONFIG.TRANSCRIBE_URL, and a lookalike path sharing the same prefix is still handled normally.",
+      "suites": [
+        "service-worker",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-SW-ROUTE-EXACT"
+      ]
+    },
+    {
+      "id": "UI-LIVE-STATUS-001",
+      "severity": "critical",
+      "title": "The live-status bar is operable and announced without a pointer",
+      "acceptance": "The in-row progress bar announces itself politely to assistive technology, its open-live-view target is focusable and activates on Enter and Space as well as click, cancellation is a labelled button, re-showing replaces rather than duplicates the bar, and removing or updating an absent bar is a safe no-op.",
+      "suites": [
+        "live-view-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-STATUS-KEYBOARD"
+      ]
+    },
+    {
+      "id": "DB-DURABILITY-001",
+      "severity": "critical",
+      "title": "A resolved write means the IndexedDB transaction committed",
+      "acceptance": "Single-operation writes resolve only after their transaction commits, cursor iteration walks forward and reverse and supports single-hop page offsets and deletion, a throwing upgrade rejects the open rather than hanging, and another tab requesting a version upgrade closes this connection instead of blocking it indefinitely.",
+      "suites": [
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-IDB-COMMIT-BEFORE-RESOLVE"
+      ]
+    },
+    {
+      "id": "REC-WAKELOCK-001",
+      "severity": "critical",
+      "title": "The screen wake lock survives the tab being backgrounded",
+      "acceptance": "Enabling acquires exactly one screen wake lock and is idempotent; the lock the operating system drops when the tab is hidden is re-acquired on return to the foreground; disabling releases it and prevents any further silent re-acquisition; and an unsupported or denied wake lock degrades to a reported failure rather than an exception.",
+      "suites": [
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-WAKELOCK-NO-REACQUIRE"
+      ]
+    },
+    {
+      "id": "AI-PIPELINE-001",
+      "severity": "high",
+      "title": "The automatic post-recording pipeline runs transcription and reply end to end",
+      "acceptance": "With both automatic settings enabled, a finished recording is chunked and uploaded to the transcription route, its timestamped timeline is persisted, the resulting transcript is sent to the reply route as a budgeted stream request, the streamed answer is reassembled exactly despite awkward network framing, and the stored reply is bound to the transcript it came from.",
+      "suites": [
+        "browser-lifecycle"
+      ]
+    },
+    {
+      "id": "UI-HELP-001",
+      "severity": "high",
+      "title": "The guide overlay opens, closes and returns focus",
+      "acceptance": "Opening the guide shows the overlay, exposes it to assistive technology and moves focus into the panel; closing hides it, marks it hidden and returns focus to whatever opened it; closing an already-closed overlay is a safe no-op.",
+      "suites": [
+        "platform-unit"
+      ]
+    },
+    {
+      "id": "UI-VERSION-001",
+      "severity": "critical",
+      "title": "The version is declared once and reported by the shell that serves it",
+      "acceptance": "The application version exists exactly once, in the service worker that names the offline cache; no application module, markup file or package manifest declares a second copy; and the label in the interface is answered at runtime by the worker actually serving the page, degrading to a plain non-numeric label when no worker serves it.",
+      "suites": [
+        "static-integrity",
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-VERSION-SECOND-COPY"
+      ]
+    },
+    {
+      "id": "REPLY-MODEL-001",
+      "severity": "critical",
+      "title": "A reply is sent to a model the server actually has",
+      "acceptance": "The reply path resolves the configured model against the installed list before generating, keeping an explicit user choice that still exists, falling back to the preferred default, then to the same model family, then to any installed model; the resolved name is persisted so the Settings picker and the request cannot disagree, and an unreachable server leaves the stored name untouched so the generate call reports the real error.",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-REPLY-MODEL-IGNORE-INSTALLED"
+      ]
+    }
+  ],
+  "predefinedFutureGates": [
+    {
+      "id": "REC-CRASH-001",
+      "title": "Crash after a durable flush",
+      "acceptance": "Force-close the owner tab after persisted fragments exist; reopening must recover exactly the committed interval without touching a live session."
+    },
+    {
+      "id": "REC-SUSPEND-001",
+      "title": "Mobile suspension and resume",
+      "acceptance": "Backgrounding beyond one heartbeat interval must not allow a second writer while the original browser still owns the capture, and resume must reconcile elapsed time safely."
+    },
+    {
+      "id": "DB-UPGRADE-001",
+      "title": "Upgrade from every supported database schema",
+      "acceptance": "Fixtures for each historical schema upgrade without deleting recordings, transcripts, summaries or legacy fragments."
+    },
+    {
+      "id": "DELETE-RACE-001",
+      "title": "Delete while AI work is active",
+      "acceptance": "Deleting text or a recording while transcription/reply is in flight must cancel work and no late result may recreate deleted data."
+    },
+    {
+      "id": "OPUS-MATRIX-001",
+      "title": "Vendor MediaRecorder interoperability matrix",
+      "acceptance": "Recorded outputs from current Chromium, Firefox and Safari fixtures retain finite duration and seeking after remux."
+    },
+    {
+      "id": "SW-ROLLBACK-001",
+      "title": "Actual-browser service-worker rollback",
+      "acceptance": "A deliberately incomplete update must leave the previous complete worker and shell available offline in a real browser."
+    },
+    {
+      "id": "PERF-LONG-001",
+      "title": "Long-session memory ceiling",
+      "acceptance": "A one-hour WAV and 90-minute WebM/Opus transcription run remain under declared peak-memory budgets and never retain or decode the complete recording or all copied windows simultaneously."
+    },
+    {
+      "id": "A11Y-KEYBOARD-001",
+      "title": "Keyboard and dialog regression gate",
+      "acceptance": "All core actions, dialogs, playback and destructive confirmations remain keyboard-operable with correct focus restoration and live announcements."
+    }
+  ],
+  "untestedModules": []
+}

@@ -1,244 +1,224 @@
-# How to Vibe Code (From Someone Who Wrote Code Before LLMs)
+# myAI
 
-*The minimal toolset to become a self-reliant builder — plus a working AI-native voice app and exactly how to talk to the model.*
+A zero-install browser PWA for recording voice notes, transcribing them, and generating AI replies. Audio and text are stored in IndexedDB. All AI work is sent through same-origin reverse-proxy routes connected to self-hosted services you control; no browser models or third-party model CDNs are used.
 
----
+This front end accompanies **Sovereign Stack, Volume 1: Home Node**: https://github.com/Atyzze/sovereign-stack
 
-I've been programming for over a decade — long enough that "the AI writes the code now" landed on me as a working professional, not a beginner. So I want to say the thing people dance around:
+## Main capabilities
 
-**LLMs removed the barrier to *writing* code. They did not remove the barrier to *being self-reliant*.**
+- WAV or Opus recording with an always-visible top-right effective-codec indicator, live waveform, one integrated green LIVE card, timer, playback, periodic durable fragment writes, and visible fatal-error shutdown.
+- Global cross-tab recording exclusion, heartbeat ownership, and per-session fragment isolation.
+- Crash-safe finalization of interrupted active recordings.
+- Desktop-seekable WebM/Opus downloads with finite duration, Segment metadata, SeekHead, and Cluster cues.
+- Bounded long-session WAV and WebM/Opus transcription.
+- Server-based Whisper transcription in overlapping timestamped chunks, with up to 10 requests in flight.
+- Streamed replies from a self-hosted Ollama-compatible endpoint, with the model resolved against the installed list before sending.
+- Live transcript and reply views that render in page on touch devices and as a popup on desktop, reporting characters, tokens, throughput and the answering model as they stream.
+- Context chaining between recordings.
+- Installable offline application shell.
+- Storage reporting, exports, selective deletion, and keyboard-operable controls.
+- Persistent-origin storage requests and finalization headroom checks for safer long recordings.
 
-Those are different walls. The first one — "how do I write this loop, this query, this socket" — is basically gone. You can describe what you want in plain language and get working code back. But the second wall is still standing: knowing *what to want*, expressing it as something you can *verify*, and owning the ground it runs on so you can keep it alive without asking anyone.
+## Privacy and security boundary
 
-That second wall is the whole game now. And nobody hands you the map over it, because the map isn't syntax — it's a small set of concepts and tools you have to *own*. This post is that map. At the end you should be able to take an idea, talk it into existence with an AI, put it on a real Linux box behind real HTTPS, and maintain it yourself, forever, without a teacher.
+Recordings and generated text are stored in this browser, while AI inputs are processed by the configured self-hosted services.
 
-I'll prove it with a real app I built this way — a browser-based, AI-native voice recorder — and then give you the crash course on the part the AI *can't* do for you: standing up the backend.
+- **Transcription:** audio chunks are sent to the same-origin `/transcribe` service. The optional server-backup setting is off by default; compatible servers receive an explicit `store_backup` Boolean for each chunk.
+- **Replies:** transcript, selected context, and AI instructions are sent to the same-origin `/ollama` service.
+- **Browser runtime:** no Transformers.js bundle, Hugging Face model files, browser inference worker, or model cache is shipped.
 
----
+The application asks for one first-use acknowledgement before server AI processing. Clearing site data resets that decision.
 
-## Part 1 — The one principle that makes AI coding actually work
+This repository contains no backend, user-account system, or multi-tenant isolation. Treat its browser origin as sensitive storage. Do not expose the app or AI routes using only an obscure URL.
 
-Here it is, and everything else hangs off it:
+A production deployment should provide:
 
-> **Define your functionality as a list of tests. Let the AI write the code that makes them pass.**
+- HTTPS and HSTS.
+- Authentication and authorization.
+- Request, rate, concurrency, and body-size limits.
+- Connection, first-byte, idle, and total timeouts.
+- Origin/CSRF controls appropriate to the authentication method.
+- Logs that do not retain raw audio, transcripts, prompts, credentials, or private endpoint URLs.
+- `Cache-Control: no-cache` for `sw.js`.
 
-That's it. That's the paradigm. I think of it as **bifurcation** — you split your project into two systems that talk to each other:
+Recommended response headers:
 
-1. **A list of features, each paired with a test that verifies it.** This is *what you want*, written down in a form a machine can check.
-2. **The code that makes those tests pass.** This is *how*, and increasingly it's the AI's job, not yours.
-
-Function emerges from the conversation between those two halves. Your job migrates almost entirely into the first half: translating fuzzy human desire into concrete, checkable statements. That, by the way, is the thing programmers were *always* secretly being trained to do — turn "I want it to feel snappy" into "this request returns in under 200ms." We just used to spend most of our hours on the second half. Now we don't have to.
-
-### Why this works: AI is reliable exactly where verification is cheap
-
-An AI coding session is an *exploration of possibilities*. Most possibilities it tries are good. Some collapse — it makes mistakes, same as we do, and there is **no way to guarantee in advance** that a given change won't break something elsewhere. That's not a flaw to be fixed; it's the nature of the thing.
-
-So you don't fight it. You *fence* it. The fence is your test suite.
-
-The clearest example: say one of your features is "the app serves a webpage at this address, on this port." You can write a five-line check that hits that socket and asks: is it up? Yes/no. The moment it's "no," you know instantly, and you know *which* change broke it. Now imagine that for every feature you care about. Your functionality *is* that list of tests. Define the list, and you can let the AI do nearly everything else — architecture, refactors, optimization loops — because every change gets graded against the list before you trust it.
-
-This also tells you precisely where AI **stops** being magic: anywhere you can't write a cheap test. "Make the rendered waveform look right." "Make this robot crack an egg." "Make this nurse read the room." Those have a thousand context-dependent details you can't reduce to pass/fail, and that's exactly where you still need human judgment in the loop. Knowing that boundary is half of being good at this.
-
-A rule of thumb I actually use: **keep the size of your code and the size of your tests roughly in balance.** If you have ten times more test code than app code, you probably need more app code to satisfy it; if you have almost no tests, you're flying blind. The two halves should grow together.
-
----
-
-## Part 2 — How to actually talk to the AI
-
-The workflow is dumber than people expect:
-
-1. **Give it the whole thing.** Zip your entire codebase — every source file, every config, even the output files — and hand it over with one line: *"full in-depth code review, please."* Repeat that in fresh contexts and watch the suggestions get less obvious over time as the codebase tightens. The model holds the whole shape in its head better than I can hold three files in mine.
-
-2. **Describe the feature however you actually think.** You don't have to write a spec. You can *talk* — ramble into a recording, transcribe it, and paste the transcript on top of the zip: "somewhere in here I describe a feature I want; build it." It genuinely works. (This very post exists because I did exactly that.) Your decade of experience still shows up here, but as *taste*, not typing: you'll know to say "this should be a two-file change, not a rewrite," and you'll be right.
-
-3. **Make it write the tests too.** Don't just ask for the feature. Ask: *"analyze all the code, infer the intended behavior, and define as many reasonable tests as you can."* Now every future change has a net under it. This is the single highest-leverage sentence in your whole vocabulary.
-
-4. **Respect the limit out loud.** Tell it — and remind yourself — that it can be wrong, that's why the tests exist, and that an *error message is a gift*. Seeing an error isn't "it doesn't work." It's the pipeline telling you *why*, which is strictly more information than silence. Be happy when you get one.
-
-That's the loop. Intent in → inferred spec → code + tests out → grade against the suite → repeat. You're not writing software anymore so much as *curating* it.
-
----
-
-## Part 3 — The worked example: an AI-native voice recorder
-
-Here's the app, so this isn't all theory. It's a Progressive Web App — runs in a browser, installs to your phone, works offline. What it does:
-
-- **Records audio** straight in the browser, drawing a live waveform, auto-gain-controlled, flushing the audio to on-device storage in **4-second WAV chunks** as it goes (so a crash never costs you more than a few seconds).
-- **Transcribes** each recording — either on-device (local Whisper) or via a cloud endpoint.
-- **Replies** with an LLM — local or cloud — and lets you **chain conversations**, feeding one recording's transcript and the AI's reply forward as context into the next.
-- Stores everything in **IndexedDB**, survives reloads, recovers half-finished recordings after a crash, and serves the whole app shell from a **service worker** so it loads with no network.
-
-The newest feature — the one I talked into existence on top of the zip — is **play-while-recording**: a real play bar on the *in-progress* recording so you can scrub back and hear what you just said without stopping. And it was tiny, because the architecture already followed the principle above: the audio was *already* being persisted as 4-second chunks, and the stop-time logic *already* stitched those chunks into a playable file. The new feature just had to do that same stitch non-destructively, on a timer.
-
-That last point is the lesson, not a footnote. When I added the feature, I pulled the chunk-stitching out into a **pure function** — no browser, no database, just bytes in, bytes out — and moved it into a file that has no side effects when imported. *Why?* Because a pure function is testable in plain Node with no browser and no install. I wrote two dozen assertions against it. They run with literally `node tests/pure.test.mjs` — no framework, no `npm install`, green or red in half a second.
-
-That's bifurcation made concrete: I pushed the *logic* down into a place I could fence with cheap tests, and left only the un-fenceable part (the actual `<audio>` element, the timer, the DOM) to be confirmed by hand. Which is the honest boundary — the play bar itself, I verify by hitting record, waiting four seconds, and pressing play. No test in Node can stand in for a human ear. **Know which half you're in.**
-
----
-
-## Part 4 — The part the AI can't do for you: your backend
-
-Here's where the free ride ends. The AI will write you a flawless front-end. But a browser app that talks to AI models still needs *somewhere to live* and *something to talk to*. You have to stand that up yourself. Good news: the minimum is small, and once you've done it once, you own it.
-
-Before the commands, the mental model — because the commands are meaningless without it.
-
-### Abstraction levels (the ladder you're standing on)
-
-Everything you touch is a stack of layers, each one hiding the one below:
-
-```
-electrons in silicon
-   → logic gates (and / or / not)
-      → machine code the CPU runs
-         → a programming language (JavaScript, Python…)
-            → functions
-               → classes / modules
-                  → services talking over a network
-                     → your app
+```text
+Content-Security-Policy: use the policy documented in index.html
+X-Frame-Options: DENY
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+Permissions-Policy: microphone=(self), camera=(), geolocation=()
+Strict-Transport-Security: max-age=31536000; includeSubDomains
 ```
 
-You do **not** need to master every rung. You need to know the ladder *exists* and to always know **which rung you're standing on**. When something breaks, debugging is mostly "which layer is lying to me?" The whole stack is the same trick repeated: math (pure relation) becomes numbers (math pinned down), numbers get forced into matter (technology), and technology gets handed instructions (a program). Math that runs is a program — and a program, unlike math, can *fail*. Which is the entire reason Part 1 exists.
+Add `frame-ancestors 'none'` to the HTTP CSP header. It is not effective inside a meta CSP.
 
-For a web app, the rung that matters most is the network one. So:
+Report security issues through the repository's private GitHub security-advisory feature when available. Never attach real recordings, transcripts, tokens, or private endpoints to a public issue.
 
-### Basic networking principles
+## Backend routes
 
-- An **IP address** is a machine's location (`203.0.113.5`). **DNS** is the phone book that turns `yourdomain.com` into that number.
-- A **port** is a numbered door on that machine. Web traffic uses **80** (HTTP) and **443** (HTTPS). Your app might run on **3000** internally; an AI model might run on **11434**.
-- An address + a port = a **socket**. "Serving a website behind a port" just means: a program is listening at one specific door, and when a request knocks, it answers.
-- **`localhost` (127.0.0.1)** means "this same machine, don't go out to the network." **`0.0.0.0`** means "listen on every interface" — i.e., the outside world can reach it. Getting these two confused is the #1 reason "it works on my machine" and nothing else.
-- A **request/response** is the whole dance: a client opens a connection to a socket, sends an HTTP request, gets a response back. That's the web, top to bottom.
-- **HTTPS** is HTTP wrapped in encryption (TLS). You want it always. The encryption needs a **certificate**, which you can now get for free and automatically (more below).
-- A **reverse proxy** is a doorman that sits on ports 80/443 and routes incoming requests to the right internal program — your static app to one place, your AI model to another — while presenting one clean HTTPS front door to the world.
+The browser expects fixed same-origin paths:
 
-### Spinning up a Linux box
+- `POST /transcribe` for audio transcription. The multipart request includes `file`, optional `language`, and explicit `store_backup=true|false`.
+- `GET /ollama/api/tags` for model discovery.
+- `POST /ollama/api/generate` for streamed replies.
 
-Rent the smallest cloud Linux server you can (any provider; pick the cheapest Ubuntu LTS instance). Then, from your own terminal:
+Change `CONFIG.TRANSCRIBE_URL` and `CONFIG.OLLAMA_URL` in `src/js/config.js` only when the reverse proxy uses different paths. The service worker explicitly excludes API routes from caching.
+
+The reply model is a soft default (`gemma4:e4b`), not a requirement. Before generating, the reply path checks the configured model against `/api/tags` and keeps an explicit choice that still exists, otherwise falling back to the default, then to another size of the same model family, then to any installed model. The resolved name is written back to the setting, so a profile that has never opened Settings still gets a working reply and the picker never displays a model the app would not use.
+
+Replies render as plain text, so `set-ai-instructions` ships with a default asking for Unicode symbols and light structure instead of LaTeX and heavy Markdown. Replace it with anything you like; emptying the box restores it.
+
+The supplied faster-whisper server exposes the expected response shape, derives its worker/executor concurrency from `transcription.parallel_jobs`, and honors the per-request backup field when request overrides are enabled. The browser keeps at most ten transcription chunks in flight per recording.
+
+## Recording safety
+
+Only one tab may capture or finalize audio at a time. The application uses an exclusive Web Lock where available and a verified shared-storage lease as a fallback. Every recording and durable fragment carries an independent session ID. Fragment rows use auto-increment primary keys plus a unique `(recording ID, session ID, sequence)` index, so matching sequence numbers from separate sessions cannot overwrite one another.
+
+Other tabs show `LIVE · OTHER TAB`, mirror the protected live row, and refuse to create a second stream. If the owner crashes, its lease expires after the configured stale interval and interrupted-recording finalization may proceed.
+
+Any microphone, encoder, or fragment-write failure is fatal to the active capture. The microphone is stopped immediately, the green LIVE state changes to `ERROR · STOPPING`, the record button is disabled, and the normal stop/finalization path runs automatically. A failed fragment remains in memory until a verified retry. If it still cannot be committed, the browser copy is marked incomplete and the app offers a complete in-memory recovery download before that memory is released. Messages distinguish previously committed audio from uncommitted recent segments; the app never claims the newest segment was saved without confirmation.
+
+Before creating a finalized master blob, the app checks the browser's estimated free origin storage because finalization temporarily needs both the durable fragments and the master copy. If there is not enough headroom, the fragments are kept for recovery instead of risking a destructive partial transition. Starting a recording also requests persistent origin storage from the record-button gesture. A grant reduces automatic eviction risk but does not replace downloading permanent backups.
+
+## Opus duration, seeking, and long transcription
+
+Chromium MediaRecorder commonly emits WebM in live-stream form with an unknown Segment size and no useful Duration or Cues. Browsers may play that stream while VLC or mpv-based players report no total duration or seeker.
+
+myAI performs a container-only remux when a WebM/Opus recording is finalized. It writes a finite Segment, Duration, SeekHead, and one CuePoint per Cluster. Compressed Opus packets are copied unchanged; audio is not decoded or re-encoded. Older valid WebM recordings are upgraded lazily on download.
+
+Long WebM/Opus transcription does not decode the complete recording. The container is indexed once, then each transcription window is assembled from only the overlapping Clusters, timestamp-rebased, decoded, uploaded, and released. There is no arbitrary 20-minute cutoff. WAV transcription similarly reads and resamples bounded ranges. Server transcription eagerly fills a 10-request worker pool, or the total chunk count when fewer than ten exist.
+
+Ogg and unusual compressed formats use the browser's whole-file decoder fallback because they do not expose WebM Cluster structure. Browser WAV-to-Opus conversion remains limited because it is a separate real-time decode/re-encode operation.
+
+## Repository layout
+
+Production code and test infrastructure are intentionally separated:
+
+```text
+assets/                       PWA icons
+src/js/                       browser application modules
+tests/
+   unit/                      deterministic unit and static checks
+   integration/               multi-realm, browser, and ffmpeg tests
+   mutation/                  controlled regression mutations
+   helpers/                   baseline runner support
+   fixtures/                  browser/worker fixtures
+   baseline-contract.json     machine-readable compatibility contract
+   run-baseline.mjs           strict release test runner
+index.html
+manifest.webmanifest
+sw.js                         offline shell and the single version declaration
+```
+
+`src/` contains only code shipped to the browser. All tests and test-only runners live under the single root `tests/` directory. There is no separate `scripts/` directory.
+
+The PWA uses two icon files, not three duplicate designs:
+
+- `assets/icon-192.png` for compact installation contexts.
+- `assets/icon-512.png` for both regular and maskable installation contexts.
+
+The 512px design includes a mask-safe inset so one file can serve both purposes.
+
+## Architecture
+
+The project uses vanilla JavaScript ES modules with no bundler and no installed npm dependencies. The browser client loads only same-origin application code and sends AI requests to the configured server routes.
+
+- `src/js/recorder.js` and `audio.js`: capture, durable fragments, finalization, encoding, and bounded WAV reads.
+- `src/js/webm-duration.js`: WebM remuxing, Cluster indexing, and finite decode-window assembly.
+- `src/js/recording-lock.js`: global Web Lock plus verified localStorage fallback.
+- `src/js/transcribe.js` and `transcribe-core.js`: cancellable transcription and timeline assembly.
+- `src/js/reply.js` and `reply-core.js`: server streaming, prompt budgeting, and timeouts.
+- `src/js/jobs.js`: identity-safe cancellation registry.
+- `src/js/db.js` and `idb-min.js`: IndexedDB access and atomic read-modify-write operations.
+- `src/js/live-tabs.js`, `live-view.js`, `live-inline.js`, `live-render.js`: live transcript/reply registries, the popup and in-page views, and their shared rendering.
+- `src/js/gui.js`: rendering, delegated actions, paging, playback, downloads, and conversion.
+- `sw.js`: atomic shell installation and explicit cache routing.
+
+The delegated action router allows the script CSP to omit `'unsafe-inline'`.
+
+## Running locally
+
+Serve the repository root over HTTPS or localhost. Do not open `index.html` directly as a file because ES modules and service workers require an HTTP origin.
 
 ```bash
-# 1. Connect (you'll get an IP and a temporary root login from the provider)
-ssh root@YOUR_SERVER_IP
-
-# 2. Make a normal user with admin rights — don't live as root
-adduser you
-usermod -aG sudo you
-
-# 3. Update everything, immediately and often
-apt update && apt upgrade -y
+python3 -m http.server 8080
 ```
 
-Then set up **key-based login** instead of passwords (far safer). On *your own* machine:
+Open `http://localhost:8080` in a modern browser. Microphone, AudioWorklet, MediaRecorder, IndexedDB, and service-worker behavior varies by browser; test the intended device before relying on it for important recordings.
+
+## Versioning
+
+The application version is written in exactly one place: `const VERSION` at the top of `sw.js`.
+
+Two properties make that the only correct home. The service worker's own bytes are what the browser compares on every update check, so a version declared anywhere else could change without any update happening at all; and it names the cache that serves every module, so it is the only value that can honestly answer which build is on screen. A constant compiled into the application is itself served cache-first, so a stale shell keeps reporting a build nobody is running - precisely the failure the label in the corner of the interface is checked to rule out.
+
+The label asks the active worker for that value at runtime (`src/js/version.js`) and repaints when a new worker takes over. When no worker serves the page it reads `dev` rather than guessing a number.
+
+Releasing:
 
 ```bash
-ssh-keygen                 # if you don't already have a key
-ssh-copy-id you@YOUR_SERVER_IP
+# 1. bump the single declaration
+#    sw.js:  const VERSION = 'v35';
+# 2. carry it into package.json
+npm run version:sync
+# 3. the gate fails if any second copy exists anywhere
+npm test
 ```
 
-Then on the server, edit `/etc/ssh/sshd_config`, set `PasswordAuthentication no`, and restart SSH (`sudo systemctl restart ssh`). Now only someone holding your key can get in.
+## Compatibility baseline
 
-### Basic firewall rules
-
-The principle is one sentence: **expose the minimum.** Default to denying everything inbound, then open only the doors you actually use. Ubuntu ships with `ufw` (uncomplicated firewall):
+The release baseline is executable and machine-readable:
 
 ```bash
-sudo ufw default deny incoming     # block everything coming in…
-sudo ufw default allow outgoing    # …let the server reach out freely
-sudo ufw allow OpenSSH             # door 22, so you can still log in
-sudo ufw allow 80/tcp              # HTTP
-sudo ufw allow 443/tcp             # HTTPS
-sudo ufw enable
-sudo ufw status                    # confirm what's open
+npm test
 ```
 
-Three doors open, everything else shut. That's a sane baseline for a personal app.
+Strict mode runs every required unit, contract, static, multi-tab, ffmpeg/ffprobe, real-Chromium, and mutation suite. Missing tools, skips, missing result markers, failed assertions, source-tree changes during tests, and surviving mutations all fail the command. A machine-readable report is written to `artifacts/baseline-report.json`.
 
-### Serving the app + reaching the AI: the reverse proxy
-
-For a static PWA like the voice recorder, the "server" is genuinely simple: serve the front-end files, and proxy any AI calls through to the local model. **Caddy** is the easiest tool for this because it fetches and renews your HTTPS certificate *automatically* — no manual cert wrangling. A minimal `Caddyfile`:
-
-```caddy
-yourdomain.com {
-    # serve the app's static files
-    root * /var/www/myai
-    file_server
-
-    # forward AI calls to a model running locally on the box
-    reverse_proxy /ollama/* localhost:11434
-    reverse_proxy /transcribe/* localhost:9000
-}
-```
-
-(Adjust paths and ports to your setup — treat this as the shape, not gospel.) Caddy now terminates HTTPS at the front door, serves your app, and quietly relays `/ollama` and `/transcribe` to the models running behind `localhost`, which the firewall never exposes directly. That last bit matters: the AI services listen only on `localhost`, so the outside world can *only* reach them through your proxy, on your terms.
-
-### Keeping things running
-
-If part of your stack is a long-running program (a Node server, a model), you want it to start on boot and restart if it dies. That's a **systemd** service — a tiny text file at `/etc/systemd/system/myapp.service`:
-
-```ini
-[Unit]
-Description=My app
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/node /home/you/app/server.js
-Restart=always
-User=you
-
-[Install]
-WantedBy=multi-user.target
-```
+For local diagnostics on a machine without Chromium or ffmpeg:
 
 ```bash
-sudo systemctl enable --now myapp
+npm run test:portable
 ```
 
-`Restart=always` means a crash self-heals. That's "which patterns persist, which patterns fade" turned into one config line.
+Portable mode may visibly skip unavailable external integrations and is not a release gate. Narrower commands include `npm run test:unit`, `npm run test:integration`, and `npm run test:mutation`.
 
-### A word on "security by unguessable URL"
+The exact contracts and future acceptance criteria live in `tests/baseline-contract.json`. Current protected behavior includes:
 
-My own voice app uses no login tokens — it leans on a long, random, unguessable URL, plus monitoring: if some IP keeps probing for URLs that don't exist, ban it, with escalating ban times the more it tries (a minute, an hour, a day — but I'd avoid *permanent* bans; that's a longer story). For a low-stakes personal tool, that's a reasonable, pragmatic posture.
+| Contract | Protected behavior |
+|---|---|
+| `REC-LOCK-001` | One global recording/finalization owner across tabs. |
+| `REC-SESSION-001` | Fragment identity includes recording, session, and sequence. |
+| `REC-LIVE-001` | One integrated green live row with synchronized other-tab state. |
+| `REC-LIFECYCLE-001` | Start, durable flush, stop, playback, and deletion. |
+| `REC-FAILSAFE-001` | Capture failures stop visibly, retain uncommitted fragments, and never overstate saved audio. |
+| `UI-AUDIO-STORAGE-001` | Saved audio, remaining browser quota, and audio fullness use stable two-decimal units. |
+| `OPUS-SEEK-001` | Finite desktop-readable duration and seeking. |
+| `OPUS-TRANSCRIBE-001` | Long WebM/Opus transcription through finite decode windows. |
+| `JOB-RACE-001` | Stale jobs cannot unregister replacements. |
+| `SW-CACHE-001` | Atomic offline updates and no API caching. |
+| `SEC-RELEASE-001` | CSP, server-only module graph, and shell integrity. |
+| `AI-BOUNDARY-001` | Explicit chunking and prompt bounds. |
+| `SERVER-POOL-001` | Server transcription fills and respects a 10-request concurrency pool. |
+| `SERVER-BACKUP-001` | Server backup retention is explicit, persistent, and off by default. |
+| `LIVE-VIEW-001` | Live transcript and reply views render under the shipped CSP. |
+| `LIVE-STREAM-002` | Re-initialising a live stream never orphans an attached view. |
+| `TEST-HARNESS-001` | The release harness is executable and its coverage is declared. |
+| `AI-STREAM-001` | Streamed replies survive arbitrary network framing. |
+| `SW-ROUTE-002` | Proxied service routes are excluded from the cache exactly as configured. |
+| `UI-LIVE-STATUS-001` | The live-status bar is operable and announced without a pointer. |
+| `DB-DURABILITY-001` | A resolved write means the IndexedDB transaction committed. |
+| `REC-WAKELOCK-001` | The screen wake lock survives the tab being backgrounded. |
+| `AI-PIPELINE-001` | Automatic transcription and reply run end to end. |
+| `UI-HELP-001` | The guide overlay opens, closes and returns focus. |
+| `TEST-BASELINE-001` | The compatibility contract itself remains executable. |
 
-But I'll be straight with you, because a guide for newcomers has to be: **obscurity is not authentication.** A secret URL is a weak lock — fine for your own scratch tools, *not* fine for anything sensitive (personal data of others, anything you'd be hurt to lose or leak). The moment stakes rise, add real auth — actual accounts, actual tokens. Know the difference between "good enough for me and my notes" and "good enough to be trusted with someone else's information." Conflating those is how people get burned.
+### Mutation guards
 
----
+The mutation suite edits temporary copies and requires the mapped tests to catch deliberate defects. It currently covers lock split-brain, fallback lease verification, session-index removal, WAV corruption, WebM passthrough, disabled Opus windowing, API caching, stale job cleanup, capture errors that continue recording, permissive skip handling, invalid contract mapping, inline popup script, unbounded popup waits, live-stream re-initialisation, a syntactically broken browser-evaluated expression, a module missing from the offline shell, broken NDJSON reply framing, a service route excluded only by prefix, a pointer-only live-status control, a write that resolves before its transaction commits, and a wake lock that is never re-acquired after the tab is backgrounded.
 
-## Part 5 — The minimal toolset
+A deliberate behavioral change must update the machine-readable contract, affected tests, mutation guards, and the release notes below in the same review. Weakening a test only to make a change pass is itself a baseline change.
 
-So, the question this whole post is really about: **what's the minimal set you have to own to never need a teacher again?** Here it is. It's smaller than you'd think.
-
-1. **A terminal + a shell** (`bash`/`zsh`). The command line is the one interface that exposes every layer.
-2. **One language you're comfortable in.** Pick *one* and go deep. JavaScript is a strong single choice because it runs in the browser *and* on the server (Node), so one language covers your whole stack.
-3. **Git + a host** (GitHub or similar). Version control isn't optional; it's your undo button across time and your backup.
-4. **An editor / IDE.** Whatever you'll actually open every day.
-5. **A Linux server (a cheap VPS) + SSH.** Your patch of ground on the internet.
-6. **A reverse proxy with automatic HTTPS** (Caddy is the gentlest). Your front door.
-7. **A way to keep things running** (systemd, or just your proxy serving static files).
-8. **Browser DevTools.** The X-ray for the front-end layer.
-9. **An LLM.** The new compiler — it turns intent into code.
-10. **A test runner** — even a zero-dependency script you run with `node`. The fence around everything the LLM gives you.
-
-That's the kit. Notice how short it is. Notice that half of it (1, 3, 4, 8) you may already have, and the other half you set up *once*.
-
----
-
-## Part 6 — Once you have it: what can you make, maintain, and manage?
-
-The payoff isn't just *making* things. Self-reliance is **make + maintain + manage** — and this toolset covers all three, which is the part teachers-and-tutorials rarely get you to.
-
-**Make:** Progressive Web Apps (like the voice recorder), web services and APIs, automation scripts, data pipelines, personal dashboards, bots, static sites, scrapers, little tools that scratch your own itch. If you can describe it and test it, you can build it.
-
-**Maintain:** Because *you* own the test suite, you can change a working app *without fear* — make the edit, run the suite, trust the green. When something breaks in production, you can trace the data stream down through the abstraction ladder and find the layer that's lying. You're not stuck praying; you're debugging.
-
-**Manage:** Because you own the box, the firewall, the proxy, and the deploy, you can keep the thing *alive* — update it, secure it, restart it, scale it a little. It's *yours*. Nobody can deprecate your stack out from under you.
-
-That triad — build it, keep it healthy, run it — is what "self-reliant programmer" actually means. Not knowing everything. Knowing how to **find out**, and how to **check**.
-
----
-
-## The thing LLMs can't hand you
-
-The model can write any function you ask for. What it *can't* give you is the trail to comfort — the lived sense of which rung you're on, what to want, and how to verify it. That comfort is the entire difference between someone who needs a teacher and someone who doesn't. And it doesn't come from the model writing more code for you. It comes from owning two things: **the ladder of abstraction** and **the verification loop.** Get those, and the teacher you no longer need is the specific one who used to tell you what to type. The judgment you keep — *what to build, and how to know it works* — was always the real job.
-
-Here's the loop I keep noticing, and I'll leave you on it: I rambled an idea into a microphone, pasted the transcript onto a zip, and got working, tested code back. Intent in, software out. I was describing the bridge and walking across it at the same time.
-
-That's the whole craft now. Go build something, fence it with tests, put it on a box that's yours, and keep it alive.
+Predefined future gates include forced-tab crash recovery, mobile suspension, historical database migrations, deletion during AI work, browser-vendor Opus fixtures, actual-browser service-worker rollback, long-session memory ceilings, and keyboard/focus accessibility.
