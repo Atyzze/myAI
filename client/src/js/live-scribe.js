@@ -39,6 +39,8 @@ import {
     afterRecordingFate
 } from './live-scribe-core.js';
 import { carryAcrossResume, transcriptSnapshot, lineTranslation } from './live-scribe-core.js';
+import { cappedPanelCount, cappedInFlight } from './capabilities-core.js';
+import { boxCapabilities } from './capabilities.js';
 import { findBoundaryRepetition, translationIntroducesRepetition, preferWiderRecheck,
          mergeTimedPcm, replaceWindowLines } from './live-refine-core.js';
 
@@ -361,9 +363,11 @@ function paintSpeakers() {
     nodes.speakers.classList.toggle('none', stats.samples === 0);
 }
 
+// The setting asks for a number of boxes; a myAI box that cannot keep up with that many
+// lowers it (capabilities-core.js). Servers without /capabilities leave it as set.
 function panelCount() {
     const value = Number(getSetting('set-translate-panels'));
-    return Number.isFinite(value) && value >= 2 ? Math.min(MAX_PANELS, Math.floor(value)) : 0;
+    return Number.isFinite(value) ? cappedPanelCount(value, MAX_PANELS, boxCapabilities()) : 0;
 }
 
 function countAttempt(key) {
@@ -431,7 +435,7 @@ function requestTranslations(rows, target) {
     const epoch = state.epoch;
     const lock = `panel:${target}`;
     if (state.translating.has(lock)) return;
-    if (translationsInFlight() >= MAX_TRANSLATE_IN_FLIGHT) return;
+    if (translationsInFlight() >= cappedInFlight(MAX_TRANSLATE_IN_FLIGHT, boxCapabilities())) return;
 
     const waitMs = state.translateNextAt - Date.now();
     if (waitMs > 0) {

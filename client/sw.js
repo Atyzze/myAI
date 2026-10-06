@@ -1,4 +1,4 @@
-const VERSION     = 'v134';
+const VERSION     = 'v135';
 const SHELL_CACHE = `myai-shell-${VERSION}`;
 // From this build on, a new worker waits until a page asks it to take over (version.js). The pages
 // of earlier builds cannot ask, and expect it to take over by itself.
@@ -45,6 +45,8 @@ const SHELL = [
     './src/js/runway-core.js',
     './src/js/speaker-infer-core.js',
     './src/js/translate-core.js',
+    './src/js/capabilities.js',
+    './src/js/capabilities-core.js',
     './src/js/speaker-confirm-core.js',
     './src/js/reply.js',
     './src/js/reply-core.js',
@@ -69,7 +71,7 @@ const SHELL_URLS = new Set(SHELL.map(path => new URL(path, self.registration.sco
 const APP_PAGES = new Set(['./', './index.html'].map(path => new URL(path, self.registration.scope).pathname));
 const isAppPage = url => APP_PAGES.has(url.pathname);
 
-const API_ROUTES = ['/ollama', '/transcribe'];
+const API_ROUTES = ['/ollama', '/transcribe', '/capabilities'];
 const isApiRoute = pathname =>
     API_ROUTES.some(route => pathname === route || pathname.startsWith(route + '/'));
 

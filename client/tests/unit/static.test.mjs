@@ -46,7 +46,7 @@ const config = read('src/js/config.js');
 const defaultModel = config.match(/'set-ollama-model':\s*'([^']+)'/)?.[1] || '';
 ok(defaultModel && read('README.md').includes(`\`${defaultModel}\``),
    `the README names the default AI model the code uses (${defaultModel}), so the two cannot drift apart again`);
-const configuredRoutes = ['OLLAMA_URL', 'TRANSCRIBE_URL'].map(key => config.match(new RegExp(`${key}:\\s*'([^']+)'`))?.[1]);
+const configuredRoutes = ['OLLAMA_URL', 'TRANSCRIBE_URL', 'CAPABILITIES_URL'].map(key => config.match(new RegExp(`${key}:\\s*'([^']+)'`))?.[1]);
 const swRoutes = (sw.match(/const API_ROUTES\s*=\s*\[([^\]]*)\]/)?.[1] || '')
     .split(',').map(part => part.trim().replace(/^'|'$/g, '')).filter(Boolean);
 ok(JSON.stringify(swRoutes.sort()) === JSON.stringify(configuredRoutes.sort()), 'the service worker excludes exactly the configured API routes');

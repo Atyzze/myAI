@@ -14,6 +14,8 @@ import { planAudioChunks, textForChunkCore, chunkCoreSamples,
 import { beginJob, endJob, abortError, hasJobOfKind } from './jobs.js';
 import { liveLogAppend, liveLogText }           from './live-tabs.js';
 import { findTimedRepetitionCandidates } from './live-refine-core.js';
+import { capped } from './capabilities-core.js';
+import { boxCapabilities } from './capabilities.js';
 
 const MAX_LIVE_REPLAY_RANGES = 6;
 
@@ -239,7 +241,8 @@ async function processOneChunk(chunk, recId, results, state, signal, loadAudio) 
 
 export async function transcribePlannedChunks(recId, chunks, loadAudio,
                                               { signal = null, progressCallback = () => {},
-                                                concurrency = CONFIG.TRANSCRIBE_CONCURRENCY } = {}) {
+                                                concurrency = capped(CONFIG.TRANSCRIBE_CONCURRENCY,
+                                                                     boxCapabilities().transcribeConcurrency) } = {}) {
     const totalChunks = chunks.length;
     liveLogAppend(recId, `📦 ${totalChunks} chunks - 60 s steps, ±3 s overlap; ${Math.min(POOL_START, concurrency)} at a time `
         + `to start, up to ${concurrency} while the server keeps up`);

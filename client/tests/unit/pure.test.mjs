@@ -4476,6 +4476,44 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
     eq(nextAutoGain(AUTO_GAIN_MIN, { rms: 5, peak: 5 }), AUTO_GAIN_MIN, 'bounds: nor drops below its floor');
 }
 
+
+{
+    // Build 135: a myAI box publishes what its hardware can take at /capabilities.
+    const { NO_LIMITS, normalizeCapabilities, capped, cappedPanelCount, cappedInFlight, describeBox }
+        = await import('../../src/js/capabilities-core.js');
+
+    eq(normalizeCapabilities(null), NO_LIMITS, 'capabilities: no answer means no limits');
+    eq(normalizeCapabilities([1, 2]), NO_LIMITS, 'capabilities: an array is not a capabilities object');
+    const caps = normalizeCapabilities({ tier: 'basic', maxPanels: '2', translateInFlight: 1.9,
+                                         transcribeConcurrency: 0, llm: 'qwen3:4b',
+                                         warnings: ['Only 4 GiB of RAM.', '', null, 'x'.repeat(500)] });
+    eq([caps.known, caps.maxPanels, caps.translateInFlight, caps.transcribeConcurrency],
+       [true, 2, 1, 1], 'capabilities: numbers are read as whole numbers and kept in range');
+    eq(caps.warnings.length, 2, 'capabilities: empty warnings are dropped');
+    eq(caps.warnings[1].length, 300, 'capabilities: a long warning is cut, not passed through whole');
+    eq(normalizeCapabilities({ maxPanels: 'lots' }).maxPanels, null, 'capabilities: a malformed limit is no limit');
+
+    eq(capped(10, null), 10, 'capped: no box limit keeps the app value');
+    eq(capped(10, 2), 2, 'capped: the box can lower the app value');
+    eq(capped(4, 16), 4, 'capped: but never raise it');
+
+    eq(cappedPanelCount(4, 4, NO_LIMITS), 4, 'panels: without a box the setting is used as is');
+    eq(cappedPanelCount(9, 4, NO_LIMITS), 4, 'panels: and still never above the app maximum');
+    eq(cappedPanelCount(4, 4, normalizeCapabilities({ maxPanels: 2 })), 2, 'panels: a box that keeps up with 2 gets 2');
+    eq(cappedPanelCount(4, 4, normalizeCapabilities({ maxPanels: 1 })), 0, 'panels: a single box is no boxes');
+    eq(cappedPanelCount(3, 4, normalizeCapabilities({ maxPanels: 0 })), 0, 'panels: a box without an AI model shows none');
+    eq(cappedPanelCount(0, 4, NO_LIMITS), 0, 'panels: the setting off stays off');
+
+    eq(cappedInFlight(4, NO_LIMITS), 4, 'in flight: without a box the app value is used');
+    eq(cappedInFlight(4, normalizeCapabilities({ translateInFlight: 1 })), 1, 'in flight: a CPU box translates one at a time');
+    eq(cappedInFlight(4, normalizeCapabilities({ translateInFlight: 0 })), 1, 'in flight: never below one, so nothing stalls');
+
+    eq(describeBox(NO_LIMITS), '', 'describeBox: nothing to say without a box');
+    const text = describeBox(normalizeCapabilities({ summary: 'basic - 4 cores', whisper: 'base on cpu', llm: null, maxPanels: 0 }));
+    ok(text.includes('basic - 4 cores') && text.includes('no AI model') && text.includes('no translation boxes'),
+       'describeBox: says plainly what a small box does not do');
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 reported = true;
 if (failed === 0) {

@@ -1,6 +1,6 @@
 {
   "name": "myai-voice-notes",
-  "version": "134.0.0",
+  "version": "135.0.0",
   "private": true,
   "type": "module",
   "description": "Zero-install voice-note PWA with self-hosted server transcription and replies.",

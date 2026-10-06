@@ -23,7 +23,8 @@ export const CONFIG = {
     TRANSCRIBE_CONCURRENCY: 10,
 
     OLLAMA_URL:             '/ollama',
-    TRANSCRIBE_URL:         '/transcribe'
+    TRANSCRIBE_URL:         '/transcribe',
+    CAPABILITIES_URL:       '/capabilities'
 };
 
 const DEFAULT_AI_INSTRUCTIONS =

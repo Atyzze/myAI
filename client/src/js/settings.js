@@ -1,6 +1,8 @@
 import { CONFIG, SETTINGS_DEFAULTS, getSetting, escapeHtml, escapeAttr, fmtBytes,
          readStored, writeStored } from './config.js';
 import { chooseReplyModel, isFallbackChoice } from './reply-core.js';
+import { describeBox } from './capabilities-core.js';
+import { boxCapabilities, loadBoxCapabilities } from './capabilities.js';
 import { loadedModels, forgetModelChoices } from './reply.js';
 import { dbExec, dbUpdate, calcTotalStorage, clearAllAudioFragments, deleteAudioFragments,
          getRecordingsOlderThan, readAudio, deleteAudio, audioFragmentSummary,
@@ -82,6 +84,23 @@ export function openSettings() {
     requestAnimationFrame(() => document.getElementById('settingsPanel')?.focus());
     refreshOllamaModels();
     refreshLoadedModels();
+    paintBoxCapabilities();
+}
+
+// A myAI box says what hardware it has and what that means for this app; other servers say
+// nothing, and the row stays hidden.
+async function paintBoxCapabilities() {
+    const row = document.getElementById('box-capabilities-row');
+    const status = document.getElementById('box-capabilities-status');
+    const list = document.getElementById('box-capabilities-warnings');
+    if (!row || !status || !list) return;
+    const caps = await loadBoxCapabilities().catch(() => boxCapabilities());
+    row.hidden = !caps.known;
+    if (!caps.known) return;
+    status.textContent = describeBox(caps);
+    list.innerHTML = [...caps.warnings.map(text => `<li class="box-warning">⚠️ ${escapeHtml(text)}</li>`),
+                      ...caps.notes.map(text => `<li>${escapeHtml(text)}</li>`)].join('');
+    list.hidden = list.children.length === 0;
 }
 
 function persistControl(key) {

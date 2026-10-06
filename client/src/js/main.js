@@ -19,6 +19,7 @@ import { renderList, resetListToFirstPage, wireActionDelegation, isConverting } 
 import { cancelAllForRec, hasAnyJob }          from './jobs.js';
 import { openHelp, closeHelp, exposeHelpGlobals } from './help.js';
 import { paintAppVersion, exposeUpdateGlobals, setUpdateBusyCheck } from './version.js';
+import { loadBoxCapabilities } from './capabilities.js';
 import { getActiveRecordingLease, isLeaseOwnedByThisTab, subscribeRecordingLease,
          holdsRecordingLock } from './recording-lock.js';
 
@@ -117,6 +118,7 @@ function paintStartupNote(text) {
 }
 
 exposeUpdateGlobals();
+loadBoxCapabilities();
 setUpdateBusyCheck(() => workingHere() || backupRunning());
 const _refreshVersionLabel = paintAppVersion(document.getElementById('app-version'));
 

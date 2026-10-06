@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="134">
+<meta name="myai-build" content="135">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -233,6 +233,8 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .settings-refresh{border:1px solid #444;background:#0a0a0a;color:#ccc;border-radius:6px;width:38px;height:38px;font-size:15px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:0}
 .settings-refresh:hover{background:#222;border-color:#888}
 .settings-hint{font-size:11px;color:#666;font-family:monospace;word-break:break-word}
+.box-capabilities-list{margin:4px 0;padding-left:18px}
+.box-capabilities-list .box-warning{color:#b26a00}
 .settings-warn{color:#e0a44d;border-left:3px solid #e0a44d;padding-left:8px;margin-top:6px}
 .settings-divider{border:none;border-top:1px solid #333;margin:2px 0}
 .settings-section-label{font-size:11px;color:#666;font-family:monospace;letter-spacing:.08em;text-transform:uppercase}
@@ -622,6 +624,12 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
       </div>
       <div class="settings-hint" id="ollama-loaded-status">Open settings to read what the server has loaded…</div>
       <div class="settings-hint">Partly on the CPU means the currently loaded models do not fit entirely in video memory.</div>
+    </div>
+    <div class="settings-row" id="box-capabilities-row" hidden>
+      <label class="settings-label">This box</label>
+      <div class="settings-hint" id="box-capabilities-status"></div>
+      <ul class="settings-hint box-capabilities-list" id="box-capabilities-warnings" hidden></ul>
+      <div class="settings-hint">Measured at boot. Translation boxes and parallel work are limited to what this hardware keeps up with.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-danger-row">
