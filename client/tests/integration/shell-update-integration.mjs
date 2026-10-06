@@ -156,8 +156,15 @@ async function openPage(url) {
         source: 'window.alert = () => {}; window.confirm = () => true;'
     });
     await client.send('Page.navigate', { url });
+    client.targetId = target.id;
     clients.push(client);
     return client;
+}
+
+// Closes the tab itself, not only this connection to it.
+async function closePage(client) {
+    try { await fetch(`http://127.0.0.1:${debugPort}/json/close/${client.targetId}`); } catch (_) {}
+    client.close();
 }
 
 const appReady = "document.readyState === 'complete' && !!document.getElementById('recordBtn')";
@@ -280,6 +287,44 @@ try {
         ok(served.stored && served.redirected === false,
            `where the server sends index.html on to ./, the shell stores it as a response of its own (${JSON.stringify(served)})`);
         ok(true, 'and the app still loads from the shell after a reload');
+    }
+
+    {
+        // Build 138: a new build is used only once the person taps the badge, also after every tab
+        // of the app was closed, which lets the waiting worker take over.
+        const site = await startServer({ build: 'v99990' });
+        servers.push(site.server);
+        const first = await controlledPage(site.base);
+        await waitFor(first, `${badge} === 'v99990'`, 20000);
+        site.state.build = 'v99991';
+        const found = await first.evaluate('window.appUpdate()');
+        ok(found === 'ready', `a newer build is downloaded and offered (${found})`);
+        await waitFor(first, `${badge} === 'v99990 › v99991'`, 20000);
+        await closePage(first);
+        await sleep(1500);
+        const reopened = await controlledPage(site.base);
+        await waitFor(reopened, `${askController}.then(version => version === 'v99991')`, 20000);
+        const started = await reopened.evaluate(`document.querySelector('meta[name="myai-build"]').content`);
+        ok(started === '99990',
+           `closing every tab of the app lets the new build's worker take over, but the next start is still the build in use (${started})`);
+        await waitFor(reopened, `${badge} === 'v99990 › v99991'`, 20000);
+        ok(true, 'and the badge offers the new build');
+        await reopened.send('Page.reload');
+        await sleep(400);
+        await waitFor(reopened, `${appReady} && !!navigator.serviceWorker.controller`, 20000);
+        const reloaded = await reopened.evaluate(`document.querySelector('meta[name="myai-build"]').content`);
+        ok(reloaded === '99990', `an ordinary reload does not switch builds either (${reloaded})`);
+        await waitFor(reopened, `${badge} === 'v99990 › v99991'`, 20000);
+        await reopened.evaluate('window.__beforeTap = true; window.appUpdate(); true');
+        await waitFor(reopened, `typeof window.__beforeTap === 'undefined' && ${appReady}`, 25000);
+        await waitFor(reopened, `${badge} === 'v99991'`, 20000);
+        const tapped = await reopened.evaluate(`document.querySelector('meta[name="myai-build"]').content`);
+        ok(tapped === '99991', `tapping the badge is what puts the new build in use (${tapped})`);
+        await reopened.send('Page.reload');
+        await sleep(400);
+        await waitFor(reopened, `${appReady} && !!navigator.serviceWorker.controller`, 20000);
+        const kept = await reopened.evaluate(`({ page: document.querySelector('meta[name="myai-build"]').content, badge: ${badge} })`);
+        ok(kept.page === '99991' && kept.badge === 'v99991', `and it stays in use (${JSON.stringify(kept)})`);
     }
 
     {

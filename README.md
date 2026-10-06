@@ -6,7 +6,7 @@ One image runs on almost anything: a workstation with a big NVIDIA card, a gamin
 
 ```
 client/   the browser app (PWA): recording, live transcript, up to 4 live translation
-          boxes, speaker numbers, replies, hands-free auto-scroll of opened texts. Build 137.
+          boxes, speaker numbers, replies, hands-free auto-scroll of opened texts; updates only on your tap. Build 138.
 vts/      VTS, the in-memory Whisper transcription server. Build 23.
 box/      what makes a box: hardware probe, model fetcher, pipeline runner, feeds,
           email notifier, backup loop, status screen. Python standard library only.

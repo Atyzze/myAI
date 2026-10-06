@@ -670,6 +670,75 @@ function makeFakeIndexedDb({ failUpgrade = false, blocked = false } = {}) {
         version.setUpdateReloader(null);
     }
 
+    {
+        // Build 138: tapping the badge is the only thing that makes a newer build the one in use.
+        stampDocument(140);
+        const asked = [];
+        const serving = {
+            postMessage(data, transfer) {
+                asked.push(data && data.type);
+                if (data && data.type === 'version') transfer[0].postMessage({ type: 'version', version: 'v141', accepted: 'v140' });
+                if (data && data.type === 'accept') transfer[0].postMessage({ type: 'accepted', version: 'v141' });
+            }
+        };
+        installNavigator({ controller: serving, getRegistration: async () => null, addEventListener() {} });
+        await version.paintAppVersion(label, { timeoutMs: 50, quietCheckMs: 0 })();
+        eq(label.textContent, 'v140 › v141',
+           'accept: a newer build that took over while every tab was closed is offered on the badge');
+        ok(!asked.includes('accept'), 'accept: and offering it accepts nothing');
+        let reloads = 0;
+        version.setUpdateReloader(() => { reloads++; });
+        version.setUpdateBusyCheck(() => false);
+        eq(await version.appUpdate(), 'reload', 'accept: tapping the badge reloads');
+        ok(asked.includes('accept') && reloads === 1,
+           `accept: having told the serving build it is accepted, so the reload lands on it (${asked.join(',')})`);
+        version.setUpdateReloader(null);
+        stampDocument(null);
+    }
+
+    {
+        stampDocument(150);
+        const asked = [];
+        const active = { postMessage(data, transfer) {
+            asked.push(data && data.type);
+            if (data.type === 'version') transfer[0].postMessage({ type: 'version', version: 'v150', accepted: 'v149' });
+            if (data.type === 'accept') transfer[0].postMessage({ type: 'accepted', version: 'v150' });
+        } };
+        installNavigator({ controller: null, getRegistration: async () => ({ active }), addEventListener() {} });
+        await version.paintAppVersion(label, { timeoutMs: 50, quietCheckMs: 0 })();
+        await macrotask();
+        ok(asked.includes('accept'),
+           'accept: a page hard-reloaded past the worker into the build that serves makes that build the accepted one');
+
+        const askedAgain = [];
+        const ordinary = { postMessage(data, transfer) {
+            askedAgain.push(data && data.type);
+            if (data.type === 'version') transfer[0].postMessage({ type: 'version', version: 'v150', accepted: 'v150' });
+        } };
+        installNavigator({ controller: ordinary, getRegistration: async () => null, addEventListener() {} });
+        await version.paintAppVersion(label, { timeoutMs: 50, quietCheckMs: 0 })();
+        await macrotask();
+        ok(!askedAgain.includes('accept'), 'accept: an ordinary load accepts nothing');
+        stampDocument(null);
+    }
+
+    {
+        stampDocument(160);
+        let updates = 0;
+        const registration = { active: workerThatReports('v160'), installing: null, waiting: null,
+                               async update() { updates++; }, addEventListener() {} };
+        installNavigator({ controller: workerThatReports('v160'), getRegistration: async () => registration, addEventListener() {} });
+        await version.paintAppVersion(label, { timeoutMs: 50, quietCheckMs: 25 })();
+        await new Promise(resolve => setTimeout(resolve, 150));
+        ok(updates >= 2, `quiet check: now and then the browser is asked whether the server has a newer build (${updates})`);
+        eq(label.textContent, 'v160', 'quiet check: and while nothing newer turns up the badge shows only the build');
+        await version.paintAppVersion(label, { timeoutMs: 50, quietCheckMs: 0 })();
+        const settled = updates;
+        await new Promise(resolve => setTimeout(resolve, 80));
+        eq(updates, settled, 'quiet check: set up again without it, it stops');
+        stampDocument(null);
+    }
+
     // A worker as the browser shows it to a page: it answers the version question, has a state, and
     // tells when that state changes. `outcome` is where its install ends: installed (and waiting,
     // since another worker serves), redundant (the install failed), or nothing yet.

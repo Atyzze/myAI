@@ -10,9 +10,12 @@ export function initialUpdateState() {
 }
 
 // The build a reload lands on: one that already serves, or one that is installed and is asked to
-// take over just before the reload.
+// take over just before the reload; the newer of the two when there are both.
 export function readyBuild(state) {
-    return (state && (state.pending || state.waiting)) || null;
+    if (!state) return null;
+    const { pending, waiting } = state;
+    if (pending && waiting) return olderBuild(pending, waiting) ? waiting : pending;
+    return pending || waiting || null;
 }
 
 export function noteServerBuild(state, reported) {

@@ -1,4 +1,4 @@
-const VERSION     = 'v137';
+const VERSION     = 'v138';
 const SHELL_CACHE = `myai-shell-${VERSION}`;
 // From this build on, a new worker waits until a page asks it to take over (version.js). The pages
 // of earlier builds cannot ask, and expect it to take over by itself.
@@ -112,6 +112,65 @@ async function replacesWorkerThatDoesNotAsk() {
     return keys.some(key => key !== SHELL_CACHE && shellBuild(key) !== null && shellBuild(key) < FIRST_BUILD_THAT_WAITS);
 }
 
+// A new build is downloaded and installed by itself, and the page offers it on the version badge,
+// but it is used only once the person taps that badge. Until then the shell of the build last
+// accepted is served, also by a newer worker that took over because every tab of the app was closed.
+// Which build that is lives in a cache of its own, so it survives the worker being stopped.
+const ACCEPTED_CACHE = 'myai-accepted';
+const ACCEPTED_KEY = new URL('./__accepted-build', self.registration.scope).href;
+// Pages of earlier builds cannot accept a worker that already serves, only one that waits. For
+// them a worker that takes over is accepted, as it was before.
+const FIRST_BUILD_THAT_ACCEPTS = 138;
+
+// The accepted build, the cache its shell is in, and, when that is not this worker's own build,
+// the addresses that shell holds, so its files are answered even where this build has none.
+let accepted = { build: null, cacheName: SHELL_CACHE, urls: null };
+let acceptedReady = loadAccepted();
+
+function buildNumber(version) {
+    const match = /^v(\d+)$/.exec(String(version || ''));
+    return match ? Number(match[1]) : null;
+}
+
+async function readAcceptedBuild() {
+    try {
+        const store = await caches.open(ACCEPTED_CACHE);
+        const hit = await store.match(ACCEPTED_KEY);
+        const text = hit && typeof hit.text === 'function' ? String(await hit.text()).trim() : '';
+        return buildNumber(text) !== null ? text : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function loadAccepted() {
+    const build = await readAcceptedBuild();
+    let cacheName = SHELL_CACHE;
+    let urls = null;
+    if (build && build !== VERSION) {
+        const name = `myai-shell-${build}`;
+        try {
+            if ((await caches.keys()).includes(name)) {
+                const shell = await caches.open(name);
+                urls = new Set((await shell.keys()).map(request => request.url));
+                cacheName = name;
+            }
+        } catch (_) {
+            urls = null;
+            cacheName = SHELL_CACHE;
+        }
+    }
+    accepted = { build, cacheName, urls };
+    return accepted;
+}
+
+async function acceptBuild(build) {
+    const store = await caches.open(ACCEPTED_CACHE);
+    await store.put(ACCEPTED_KEY, new Response(build, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } }));
+    acceptedReady = loadAccepted();
+    return acceptedReady;
+}
+
 // A new worker no longer takes over by itself: an open tab keeps the files of the build it started
 // with until the person reloads it, and a pop-up it opens cannot get a module of another build.
 self.addEventListener('install', event => {
@@ -123,29 +182,41 @@ self.addEventListener('install', event => {
 
 self.addEventListener('activate', event => {
     event.waitUntil((async () => {
-        // Only the shells of older builds go: a newer build may be installing its own right now,
-        // and would otherwise take over later with no shell at all.
+        // Taking over is not accepting: the build last accepted keeps being served. This build is
+        // accepted only when nothing was yet (a first install), when the accepted build's shell is
+        // gone, or when that build's pages could not accept a worker that serves.
+        const current = await acceptedReady;
+        const number = buildNumber(current.build);
+        const shellGone = current.build !== VERSION && current.cacheName === SHELL_CACHE;
+        if (!current.build || number === null || number < FIRST_BUILD_THAT_ACCEPTS || shellGone) {
+            await acceptBuild(VERSION);
+        }
+        const { cacheName } = await acceptedReady;
+        // Only the shells of older builds go, never the accepted one: a newer build may be
+        // installing its own right now, and would otherwise take over later with no shell at all.
         const keys = await caches.keys();
-        const current = shellBuild(SHELL_CACHE);
-        const staleKeys = keys.filter(key => key.startsWith('myai-shell-') && key !== SHELL_CACHE
-            && !(shellBuild(key) !== null && current !== null && shellBuild(key) > current));
+        const own = shellBuild(SHELL_CACHE);
+        const staleKeys = keys.filter(key => key.startsWith('myai-shell-') && key !== SHELL_CACHE && key !== cacheName
+            && !(shellBuild(key) !== null && own !== null && shellBuild(key) > own));
         await Promise.all(staleKeys.map(key => caches.delete(key)));
         await self.clients.claim();
     })());
 });
 
 async function cacheFirstShell(request) {
-    const cache = await caches.open(SHELL_CACHE);
+    const { cacheName } = await acceptedReady;
+    const cache = await caches.open(cacheName);
     const cached = await cache.match(request);
     if (cached) return cached;
 
     const response = await fetch(request);
-    if (response && response.ok) await cache.put(request, response.clone()).catch(() => {});
+    if (cacheName === SHELL_CACHE && response && response.ok) await cache.put(request, response.clone()).catch(() => {});
     return response;
 }
 
 async function navigationResponse(request) {
-    const cache = await caches.open(SHELL_CACHE);
+    const { cacheName } = await acceptedReady;
+    const cache = await caches.open(cacheName);
     const shell = await cache.match(new URL('./index.html', self.registration.scope).href);
     if (shell) return shell;
 
@@ -158,17 +229,32 @@ async function navigationResponse(request) {
         { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 }
 
+function reply(event, message) {
+    const port = event.ports && event.ports[0];
+    if (port) port.postMessage(message);
+    else if (event.source) event.source.postMessage(message);
+}
+
 self.addEventListener('message', event => {
     const data = event.data;
-    if (data && data.type === 'activate-now') {
-        event.waitUntil(self.skipWaiting());
+    if (!data) return;
+    // A worker that waits, asked because the person tapped the version: this build is accepted.
+    if (data.type === 'activate-now') {
+        event.waitUntil(acceptBuild(VERSION).catch(() => {}).then(() => self.skipWaiting()));
         return;
     }
-    if (!data || data.type !== 'version') return;
-    const reply = { type: 'version', version: VERSION };
-    const port = event.ports && event.ports[0];
-    if (port) port.postMessage(reply);
-    else if (event.source) event.source.postMessage(reply);
+    // The worker that serves, asked by a page of an older build because the person tapped the
+    // version there: from now on this build's shell is served.
+    if (data.type === 'accept') {
+        event.waitUntil(acceptBuild(VERSION).then(
+            () => reply(event, { type: 'accepted', version: VERSION }),
+            () => reply(event, { type: 'accepted', version: null })));
+        return;
+    }
+    if (data.type !== 'version') return;
+    event.waitUntil(acceptedReady.then(
+        current => reply(event, { type: 'version', version: VERSION, accepted: current.build || VERSION }),
+        () => reply(event, { type: 'version', version: VERSION, accepted: VERSION })));
 });
 
 self.addEventListener('fetch', event => {
@@ -183,5 +269,7 @@ self.addEventListener('fetch', event => {
         if (isAppPage(url)) event.respondWith(navigationResponse(request));
         return;
     }
-    if (SHELL_URLS.has(url.href)) event.respondWith(cacheFirstShell(request));
+    if (SHELL_URLS.has(url.href) || (accepted.urls && accepted.urls.has(url.href))) {
+        event.respondWith(cacheFirstShell(request));
+    }
 });

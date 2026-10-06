@@ -2026,6 +2026,20 @@
       "suites": [
         "user-journeys"
       ]
+    },
+    {
+      "id": "UPDATE-ONLY-ON-TAP-001",
+      "title": "A new build is downloaded and offered on the version badge but never put in use by itself: not while tabs are open, not after every tab was closed and its worker took over, not on an ordinary reload; tapping the badge is what makes it the build in use, and it stays in use",
+      "suites": [
+        "service-worker",
+        "platform-unit",
+        "shell-update"
+      ],
+      "mutationGuards": [
+        "MUT-TAKEOVER-ACCEPTS-ITSELF",
+        "MUT-ACCEPTED-SHELL-DELETED",
+        "MUT-TAP-DOES-NOT-ACCEPT"
+      ]
     }
   ],
   "untestedModules": []

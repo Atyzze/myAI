@@ -8,7 +8,11 @@ const UPDATE_TIMEOUT_MS = 20000;
 const ACTIVATION_TIMEOUT_MS = 30000;
 const SETTLED_WORKER_STATES = new Set(['installed', 'activating', 'activated', 'redundant']);
 
-function askWorkerVersion(worker, timeoutMs = ASK_TIMEOUT_MS) {
+const QUIET_CHECK_MS = 30 * 60 * 1000;
+
+// Asks a worker one question over a channel of its own; resolves with its answer, or null when it
+// gives none in time.
+function askWorker(worker, message, timeoutMs = ASK_TIMEOUT_MS) {
     return new Promise(resolve => {
         if (!worker || typeof worker.postMessage !== 'function') { resolve(null); return; }
 
@@ -27,9 +31,9 @@ function askWorkerVersion(worker, timeoutMs = ASK_TIMEOUT_MS) {
             channel = new MessageChannel();
             channel.port1.onmessage = event => {
                 const data = event && event.data;
-                settle(data && typeof data.version === 'string' ? data.version : null);
+                settle(data && typeof data === 'object' ? data : null);
             };
-            worker.postMessage({ type: 'version' }, [channel.port2]);
+            worker.postMessage(message, [channel.port2]);
         } catch (_) {
             settle(null);
             return;
@@ -37,6 +41,11 @@ function askWorkerVersion(worker, timeoutMs = ASK_TIMEOUT_MS) {
 
         if (!settled) timer = setTimeout(() => settle(null), timeoutMs);
     });
+}
+
+async function askWorkerVersion(worker, timeoutMs = ASK_TIMEOUT_MS) {
+    const data = await askWorker(worker, { type: 'version' }, timeoutMs);
+    return data && typeof data.version === 'string' ? data.version : null;
 }
 
 function withinTime(promise, timeoutMs, fallback = null) {
@@ -95,12 +104,33 @@ export async function readShellVersion({ timeoutMs = ASK_TIMEOUT_MS } = {}) {
     return askWorkerVersion(worker, timeoutMs);
 }
 
+// The serving worker's build and the build it serves the shell of: they differ while a newer build
+// has taken over (every tab of the app was closed) but has not been accepted yet. Workers before
+// Build 138 do not say; they always serve their own.
+export async function readShellBuilds({ timeoutMs = ASK_TIMEOUT_MS } = {}) {
+    const worker = await servingWorker(timeoutMs);
+    const data = await askWorker(worker, { type: 'version' }, timeoutMs);
+    if (!data || typeof data.version !== 'string') return null;
+    return { version: data.version, accepted: typeof data.accepted === 'string' ? data.accepted : data.version };
+}
+
+// The person tapped the version on a page older than the worker that serves: that worker's build
+// is accepted, so the reload that follows lands on it. A worker before Build 138 does not answer;
+// it serves its own build anyway.
+export async function acceptServingBuild({ timeoutMs = ASK_TIMEOUT_MS } = {}) {
+    const worker = await servingWorker(timeoutMs);
+    const data = await askWorker(worker, { type: 'accept' }, timeoutMs);
+    return !!(data && data.type === 'accepted' && data.version);
+}
+
 export async function readIncomingVersion({ timeoutMs = ASK_TIMEOUT_MS } = {}) {
     const worker = await incomingWorker(timeoutMs);
     return askWorkerVersion(worker, timeoutMs);
 }
 
 let _announced = null;
+let _askTimeoutMs = ASK_TIMEOUT_MS;
+let _quietTimer = null;
 let _state = initialUpdateState();
 let _paint = () => {};
 let _check = () => Promise.resolve(_state);
@@ -151,8 +181,10 @@ function byId(id) {
 }
 
 export function paintAppVersion(el, { timeoutMs = ASK_TIMEOUT_MS, now = () => Date.now(),
-                                      activationTimeoutMs = ACTIVATION_TIMEOUT_MS } = {}) {
+                                      activationTimeoutMs = ACTIVATION_TIMEOUT_MS,
+                                      quietCheckMs = QUIET_CHECK_MS } = {}) {
     let repaintTimer = null;
+    _askTimeoutMs = timeoutMs;
     _state = initialUpdateState();
     _state = noteLoadedVersion(_state, documentBuild());
 
@@ -269,9 +301,17 @@ export function paintAppVersion(el, { timeoutMs = ASK_TIMEOUT_MS, now = () => Da
     };
 
     const refresh = async () => {
-        const reported = await readShellVersion({ timeoutMs });
+        const builds = await readShellBuilds({ timeoutMs });
+        const reported = builds ? builds.version : null;
         _state = noteLoadedVersion(_state, reported);
         paint();
+        // A page loaded past the worker (a hard reload) runs the build the worker has, which is not
+        // the one accepted while a newer build took over unasked: the person reloaded into it, so it
+        // becomes the accepted one, and the next ordinary reload does not land on the older build.
+        const sw = container();
+        if (builds && sw && !sw.controller && builds.version === _state.loaded && builds.accepted !== builds.version) {
+            acceptServingBuild({ timeoutMs }).catch(() => {});
+        }
         if (reported && reported !== _announced) {
             _announced = reported;
             console.info(`myAI shell ${reported}`);
@@ -323,6 +363,36 @@ export function paintAppVersion(el, { timeoutMs = ASK_TIMEOUT_MS, now = () => Da
                 _paint();
             }).catch(() => {});
         });
+    }
+
+    // Every half hour while the app is on screen, and when it comes back on screen after longer,
+    // the browser is asked whether the server has a newer build. One that has is downloaded and
+    // offered on the badge; nothing changes for this page until the badge is tapped.
+    const quietCheck = async () => {
+        if (_state.checking || updateBusy(_state)) return;
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+        lastQuietCheck = now();
+        const registration = await registrationOf(timeoutMs);
+        if (!registration || typeof registration.update !== 'function') return;
+        watchRegistration(registration);
+        await withinTime(Promise.resolve(registration.update()).catch(() => null), UPDATE_TIMEOUT_MS);
+        await inspectRegistration().catch(() => {});
+    };
+    let lastQuietCheck = now();
+    if (_quietTimer) clearInterval(_quietTimer);
+    _quietTimer = null;
+    if (quietCheckMs > 0 && typeof setInterval === 'function') {
+        _quietTimer = setInterval(() => { quietCheck().catch(() => {}); }, quietCheckMs);
+        if (_quietTimer && typeof _quietTimer.unref === 'function') _quietTimer.unref();
+        if (typeof document !== 'undefined' && typeof document.addEventListener === 'function'
+            && !paintAppVersion._visibilityWired) {
+            paintAppVersion._visibilityWired = true;
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible' && now() - lastQuietCheck > quietCheckMs) {
+                    quietCheck().catch(() => {});
+                }
+            });
+        }
     }
 
     paint();
@@ -385,7 +455,12 @@ export async function appUpdate() {
             _reload();
             return 'force';
         }
-        if (_state.waiting) await activateWaitingWorker();
+        // Tapping is the confirmation: a build that waits is asked to take over, and a newer build
+        // that already serves (it took over while every tab was closed) is accepted. Either way the
+        // reload lands on the build the badge offered, the newer one when there are two.
+        const waitingIsNewest = _state.waiting && (!_state.pending || readyBuild(_state) === _state.waiting);
+        if (waitingIsNewest) await activateWaitingWorker();
+        else if (_state.pending) await acceptServingBuild({ timeoutMs: _askTimeoutMs });
         _reload();
         return 'reload';
     }

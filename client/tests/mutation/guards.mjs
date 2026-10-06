@@ -698,8 +698,8 @@ export const mutations = [
     {
         id: 'MUT-ACTIVATE-MESSAGE-IGNORED',
         file: 'sw.js',
-        from: '        event.waitUntil(self.skipWaiting());',
-        to: '        event.waitUntil(Promise.resolve());',
+        from: '        event.waitUntil(acceptBuild(VERSION).catch(() => {}).then(() => self.skipWaiting()));',
+        to: '        event.waitUntil(acceptBuild(VERSION).catch(() => {}));',
         command: ['node', 'tests/unit/sw-routing.test.mjs'],
         expected: /asked by a page, it takes over/
     },
@@ -714,8 +714,8 @@ export const mutations = [
     {
         id: 'MUT-WAITING-NOT-ASKED',
         file: 'src/js/version.js',
-        from: '        if (_state.waiting) await activateWaitingWorker();\n',
-        to: '',
+        from: '        if (waitingIsNewest) await activateWaitingWorker();',
+        to: '        if (waitingIsNewest) { /* left waiting */ }',
         command: ['node', 'tests/unit/platform.test.mjs'],
         expected: /after asking the waiting build to take over/
     },
@@ -770,7 +770,7 @@ export const mutations = [
     {
         id: 'MUT-ACTIVATE-DELETES-NEWER-SHELL',
         file: 'sw.js',
-        from: '            && !(shellBuild(key) !== null && current !== null && shellBuild(key) > current));',
+        from: '            && !(shellBuild(key) !== null && own !== null && shellBuild(key) > own));',
         to: '            );',
         command: ['node', 'tests/unit/sw-routing.test.mjs'],
         expected: /the shell of a newer build that is installing meanwhile is left alone/
@@ -3629,5 +3629,29 @@ export const mutations = [
         to: '    exact = Math.max(0, exact);',
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /it stops at the end of the text/
+    },
+    {
+        id: 'MUT-TAKEOVER-ACCEPTS-ITSELF',
+        file: 'sw.js',
+        from: '        if (!current.build || number === null || number < FIRST_BUILD_THAT_ACCEPTS || shellGone) {',
+        to: '        if (true) {',
+        command: ['node', 'tests/unit/sw-routing.test.mjs'],
+        expected: /still serves the build last accepted/
+    },
+    {
+        id: 'MUT-ACCEPTED-SHELL-DELETED',
+        file: 'sw.js',
+        from: "        const staleKeys = keys.filter(key => key.startsWith('myai-shell-') && key !== SHELL_CACHE && key !== cacheName",
+        to: "        const staleKeys = keys.filter(key => key.startsWith('myai-shell-') && key !== SHELL_CACHE",
+        command: ['node', 'tests/unit/sw-routing.test.mjs'],
+        expected: /still serves the build last accepted \(expected "index of v201", got "network"\)/
+    },
+    {
+        id: 'MUT-TAP-DOES-NOT-ACCEPT',
+        file: 'src/js/version.js',
+        from: '        else if (_state.pending) await acceptServingBuild({ timeoutMs: _askTimeoutMs });',
+        to: '        else if (false) await acceptServingBuild({ timeoutMs: _askTimeoutMs });',
+        command: ['node', 'tests/unit/platform.test.mjs'],
+        expected: /having told the serving build it is accepted/
     },
 ];

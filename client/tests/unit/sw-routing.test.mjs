@@ -108,6 +108,10 @@ function ok(value, message) {
     if (!value) throw new Error(`Assertion failed: ${message}`);
 }
 
+function eq(actual, expected, message) {
+    ok(JSON.stringify(actual) === JSON.stringify(expected), `${message} (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`);
+}
+
 function lifecycleEvent() {
     let promise = null;
     return {
@@ -246,6 +250,157 @@ ok(dispatchFetch({ url: 'https://evil.example/script.js' }).responsePromise === 
    'other cross-origin requests are not intercepted');
 ok(dispatchFetch({ url: 'https://app.test/src/js/main.js', method: 'POST' }).responsePromise === null,
    'non-GET requests are not intercepted');
+
+
+// Build 138: a new build is used only once the person accepts it by tapping the version. Each case
+// runs a fresh worker of a given build over caches that keep what is put in them.
+function namedCaches(initial = {}) {
+    const stores = new Map();
+    class Stored {
+        constructor(body) { this.body = String(body); this.ok = true; this.status = 200; this.redirected = false; }
+        async text() { return this.body; }
+        clone() { return this; }
+    }
+    const store = name => {
+        if (!stores.has(name)) {
+            const entries = new Map();
+            stores.set(name, {
+                entries,
+                async match(request) { return entries.get(new URL(request.url || request, 'https://app.test/').href); },
+                async put(request, response) {
+                    const body = response && typeof response.text === 'function' ? await response.text()
+                        : response && response.body !== undefined ? response.body : String(response);
+                    entries.set(new URL(request.url || request, 'https://app.test/').href, new Stored(body));
+                },
+                async keys() { return [...entries.keys()].map(url => ({ url })); }
+            });
+        }
+        return stores.get(name);
+    };
+    for (const [name, files] of Object.entries(initial)) {
+        const cache = store(name);
+        for (const [path, body] of Object.entries(files)) cache.entries.set(new URL(path, 'https://app.test/').href, new Stored(body));
+    }
+    return {
+        stores,
+        api: {
+            async open(name) { return store(name); },
+            async keys() { return [...stores.keys()]; },
+            async delete(name) { return stores.delete(name); }
+        },
+        Stored
+    };
+}
+
+function workerOfBuild(build, initialCaches) {
+    const box = namedCaches(initialCaches);
+    const handlers = new Map();
+    const state = { skipped: false, claimed: false, fetched: [] };
+    class ResponseOfText {
+        constructor(body) { this.body = String(body); this.ok = true; this.status = 200; }
+        async text() { return this.body; }
+        clone() { return this; }
+    }
+    const ctx = vm.createContext({
+        URL, Set, Map, Promise, console,
+        Request: FakeRequest,
+        Response: ResponseOfText,
+        fetch: async request => { const url = request.url || request; state.fetched.push(url); return { ok: true, status: 200, fromNetwork: true, url, async text() { return 'network'; }, clone() { return this; } }; },
+        caches: box.api,
+        self: {
+            registration: { scope: 'https://app.test/' },
+            location: { origin: 'https://app.test' },
+            clients: { async claim() { state.claimed = true; } },
+            async skipWaiting() { state.skipped = true; },
+            addEventListener(type, handler) { handlers.set(type, handler); }
+        }
+    });
+    const source = fs.readFileSync(new URL('../../sw.js', import.meta.url), 'utf8')
+        .replace(/const VERSION\s*=\s*'v\d+';/, `const VERSION = '${build}';`);
+    vm.runInContext(source, ctx, { filename: 'sw.js' });
+    const lifecycle = async (type, extra = {}) => {
+        let promise = null;
+        handlers.get(type)({ ...extra, waitUntil(value) { promise = Promise.resolve(value); } });
+        if (promise) await promise;
+    };
+    const ask = async data => {
+        let answer = null;
+        await lifecycle('message', { data, ports: [{ postMessage(message) { answer = message; } }] });
+        return answer;
+    };
+    const fetchOf = (url, mode = 'cors') => {
+        let responsePromise = null;
+        handlers.get('fetch')({ request: { url, method: 'GET', mode }, respondWith(value) { responsePromise = Promise.resolve(value); },
+                                waitUntil() {} });
+        return responsePromise;
+    };
+    const body = async promise => { const response = await promise; return response && typeof response.text === 'function' ? response.text() : null; };
+    return { box, state, lifecycle, ask, fetchOf, body };
+}
+
+const shellOf = (build, extra = {}) => ({ 'index.html': `index of ${build}`, 'src/js/main.js': `main of ${build}`, ...extra });
+const acceptedRecord = build => ({ '__accepted-build': build });
+
+{
+    const first = workerOfBuild('v201', { 'myai-shell-v201': shellOf('v201') });
+    await first.lifecycle('activate');
+    eq(await first.body(first.box.api.open('myai-accepted').then(c => c.match('https://app.test/__accepted-build'))), 'v201',
+       'accept: a first install accepts its own build');
+    eq(await first.body(first.fetchOf('https://app.test/', 'navigate')), 'index of v201', 'accept: and serves it');
+}
+
+{
+    const later = workerOfBuild('v202', {
+        'myai-accepted': acceptedRecord('v201'),
+        'myai-shell-v201': shellOf('v201', { 'src/js/only-in-201.js': 'gone in 202' }),
+        'myai-shell-v202': shellOf('v202')
+    });
+    await later.lifecycle('activate');
+    eq(await later.body(later.fetchOf('https://app.test/', 'navigate')), 'index of v201',
+       'accept: a newer build that took over because every tab was closed still serves the build last accepted');
+    eq(await later.body(later.fetchOf('https://app.test/src/js/main.js')), 'main of v201',
+       'accept: page and modules alike');
+    eq(await later.body(later.fetchOf('https://app.test/src/js/only-in-201.js')), 'gone in 202',
+       'accept: also a file the newer build no longer has, which the network would not have either');
+    ok(later.box.stores.has('myai-shell-v201'), 'accept: the accepted shell is kept when the newer build takes over');
+    const asked = await later.ask({ type: 'version' });
+    eq([asked.version, asked.accepted], ['v202', 'v201'], 'accept: asked, it names its own build and the accepted one, so the page can offer it');
+    ok(!later.state.skipped, 'accept: nothing about taking over asked it to skip waiting');
+
+    const reply = await later.ask({ type: 'accept' });
+    eq(reply && [reply.type, reply.version], ['accepted', 'v202'], 'accept: a tap on an older page accepts the serving build');
+    eq(await later.body(later.fetchOf('https://app.test/', 'navigate')), 'index of v202', 'accept: and the reload lands on it');
+    eq(await later.body(later.fetchOf('https://app.test/src/js/main.js')), 'main of v202', 'accept: modules too');
+}
+
+{
+    const waiting = workerOfBuild('v203', {
+        'myai-accepted': acceptedRecord('v202'),
+        'myai-shell-v202': shellOf('v202'),
+        'myai-shell-v203': shellOf('v203')
+    });
+    await waiting.lifecycle('message', { data: { type: 'activate-now' } });
+    ok(waiting.state.skipped, 'accept: a waiting build asked by a tap takes over');
+    await waiting.lifecycle('activate');
+    eq(await waiting.body(waiting.fetchOf('https://app.test/', 'navigate')), 'index of v203',
+       'accept: and, being accepted by that tap, serves its own build');
+    ok(!waiting.box.stores.has('myai-shell-v202'), 'accept: the shell no longer accepted goes once the accepted build takes over');
+}
+
+{
+    const legacy = workerOfBuild('v204', { 'myai-shell-v137': shellOf('v137'), 'myai-shell-v204': shellOf('v204') });
+    await legacy.lifecycle('activate');
+    eq(await legacy.body(legacy.fetchOf('https://app.test/', 'navigate')), 'index of v204',
+       'accept: replacing a build from before acceptance, whose pages cannot accept, a build that takes over is used, as before');
+    ok(!legacy.box.stores.has('myai-shell-v137'), 'accept: and the old shell goes');
+}
+
+{
+    const lost = workerOfBuild('v205', { 'myai-accepted': acceptedRecord('v201'), 'myai-shell-v205': shellOf('v205') });
+    await lost.lifecycle('activate');
+    eq(await lost.body(lost.fetchOf('https://app.test/', 'navigate')), 'index of v205',
+       'accept: when the accepted shell is gone, the build that serves becomes the accepted one instead of serving nothing');
+}
 
 console.log(`✓ all ${assertions} service-worker assertions passed`);
 emitTestResult('service-worker', 'pass', { assertions });
