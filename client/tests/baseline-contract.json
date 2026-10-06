@@ -2019,6 +2019,13 @@
         "MUT-AUTOSCROLL-FIGHTS-READER",
         "MUT-AUTOSCROLL-PAST-END"
       ]
+    },
+    {
+      "id": "RETENTION-ROW-001",
+      "title": "A recording's retention countdown shares the size bar's row, at its right end, on desktop and down to a 360 px phone, instead of taking a row of its own",
+      "suites": [
+        "user-journeys"
+      ]
     }
   ],
   "untestedModules": []

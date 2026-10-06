@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="136">
+<meta name="myai-build" content="137">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -272,11 +272,13 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .rec-filename[data-edit-title]{cursor:text}
 .rec-filename[data-edit-title]:hover{text-decoration:underline dotted #555;text-underline-offset:3px}
 .rec-title-input{font:inherit;font-weight:bold;background:#0a0a0a;border:1px solid #4caf50;border-radius:6px;color:#fff;padding:4px 8px;width:min(100%,540px)}
-.rec-storage{display:flex;align-items:center;gap:10px;margin:2px 0 2px}
-.rec-storage-track{flex:1;min-width:60px;max-width:340px;height:6px;background:#1a1a1a;border-radius:99px;overflow:hidden}
+.rec-meta{display:flex;flex-wrap:wrap;align-items:center;column-gap:10px;row-gap:2px;margin:2px 0 4px}
+.rec-storage{display:flex;align-items:center;gap:8px;flex:1 1 auto;min-width:0}
+.rec-storage-track{flex:1;min-width:24px;max-width:340px;height:6px;background:#1a1a1a;border-radius:99px;overflow:hidden}
 .rec-storage-fill{height:100%;background:linear-gradient(90deg,#2f6b3a,#5cc46a);border-radius:99px}
 .rec-storage-label{font-family:monospace;font-size:11px;color:#777;white-space:nowrap}
-.rec-expiry{font-family:monospace;font-size:11px;color:#6b6b6b;white-space:nowrap;display:flex;gap:10px;margin:0 0 2px}
+.rec-expiry{font-family:monospace;font-size:11px;color:#6b6b6b;white-space:nowrap;display:flex;gap:10px}
+.rec-storage + .rec-expiry{margin-left:auto}
 .rec-expiry .soon{color:#e0b34d}
 
 #pagination{margin-top:1em}

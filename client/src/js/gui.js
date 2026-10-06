@@ -675,6 +675,9 @@ function buildRecordingItem(rec) {
         expiryParts.push(`<span class="${retention.textExpiresInMs <= 24 * 3600 * 1000 ? 'soon' : ''}" title="Transcripts and replies are deleted automatically when this reaches zero.">📝 text ${escapeHtml(fmtRetentionRemaining(retention.textExpiresInMs))}</span>`);
     }
     const expiryHtml = expiryParts.length ? `<div class="rec-expiry">${expiryParts.join('')}</div>` : '';
+    // One row: the size bar on the left, the retention countdown in the room to its right. It wraps
+    // below the bar only where the row is too narrow for both.
+    const metaRowHtml = (storageBar || expiryHtml) ? `<div class="rec-meta">${storageBar}${expiryHtml}</div>` : '';
 
     const pref     = getSetting('set-recording-format');
     const recFmt   = storedFormat(rec);
@@ -745,8 +748,7 @@ function buildRecordingItem(rec) {
 
     li.innerHTML = `
     <div class="rec-top"><span class="rec-filename" role="button" tabindex="0" data-edit-title data-rec="${rec.id}" title="Click to rename this recording">${safeName}</span>${fmtBadge}</div>
-    ${storageBar}
-    ${expiryHtml}
+    ${metaRowHtml}
     ${hasAudio ? `<div class="rec-player"><div class="player" data-dur="${rec.durationMs || 0}">
       <audio data-rec-audio="${rec.id}" preload="none"></audio>
       <div class="player-main">

@@ -63,3 +63,4 @@ Builds 37 to 89 had one notes file each; they are condensed here. The full notes
 - 134: What the live transcript misses is marked and can be filled in afterwards, a word cut at a window edge is no longer shown twice, and a busy transcription server loses no section.
 - 135: The app sizes itself to the box it runs on: a myAI box publishes what its hardware can take at /capabilities, translation boxes and parallel work never ask more of it, and Settings shows the box and its warnings.
 - 136: An opened reply, transcript or context item can scroll by itself: ▶ starts and pauses, a speed button opens a popup to set lines a minute, the reader's own scrolling is followed, and it stops at the end.
+- 137: A recording's retention countdown moves up into the room to the right of its size bar, one row instead of two, down to a 360 px phone.

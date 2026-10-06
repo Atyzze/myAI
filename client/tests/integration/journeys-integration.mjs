@@ -328,6 +328,42 @@ try {
        `the storage counter equals the audio actually stored (${counted.total} vs ${counted.stored})`);
     ok(/100%/.test(counted.label), `and the only recording is shown as all of it (${counted.label})`);
 
+    journey('The retention countdown sits on the size bar\'s row, at its right end, down to a 360 px phone');
+    const rowLayout = [];
+    for (const [width, mobile] of [[0, false], [390, true], [360, true]]) {
+        if (width) await app.send('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile });
+        rowLayout.push(await app.evaluate(`(async () => {
+            const { dbUpdate } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');
+            await dbUpdate(CONFIG.STORE_REC, ${first}, rec => {
+                rec.transcripts = rec.transcripts && rec.transcripts.length ? rec.transcripts
+                    : [{ id: 'row1', text: 'row layout', plain: 'row layout', source: 'S', time: Date.now() }];
+                return rec;
+            });
+            const gui = await import('/src/js/gui.js');
+            await gui.renderList({ force: true });
+            const row = document.getElementById('rec-${first}');
+            const bar = row.querySelector('.rec-meta .rec-storage'), expiry = row.querySelector('.rec-meta .rec-expiry');
+            if (!bar || !expiry) return { missing: true };
+            const b = bar.getBoundingClientRect(), e = expiry.getBoundingClientRect(), m = bar.parentNode.getBoundingClientRect();
+            return { width: innerWidth, text: expiry.textContent,
+                     sameRow: Math.abs((b.top + b.bottom) / 2 - (e.top + e.bottom) / 2) < 3,
+                     atRightEnd: Math.abs(m.right - e.right) < 2, afterLabel: e.left >= b.left + 40 };
+        })()`));
+    }
+    await app.send('Emulation.clearDeviceMetricsOverride');
+    for (const layout of rowLayout) {
+        ok(!layout.missing && /audio/.test(layout.text) && /text/.test(layout.text),
+           `the row holds the size bar and both countdowns (${JSON.stringify(layout)})`);
+        ok(layout.sameRow && layout.atRightEnd && layout.afterLabel,
+           `at ${layout.width} px the countdown shares the bar's row, at its right end (${JSON.stringify(layout)})`);
+    }
+    await app.evaluate(`(async () => {
+        const { dbUpdate } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');
+        await dbUpdate(CONFIG.STORE_REC, ${first}, rec => { rec.transcripts = (rec.transcripts || []).filter(t => t.id !== 'row1'); return rec; });
+        const gui = await import('/src/js/gui.js'); await gui.renderList({ force: true });
+        return true;
+    })()`);
+
     journey('A conversion that outlives its recording leaves nothing behind');
     const doomed = await record(app, 3, { format: 'wav' });
     await app.evaluate(`localStorage.setItem('set-recording-format', 'opus'); true`);
