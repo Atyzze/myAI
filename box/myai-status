@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# myai-status: what this box is, what it is doing, and how to reach it.
+#
+#   myai-status            print once
+#   myai-status --console  the screen on the box's own display (tty1): refreshes,
+#                          and [L] shows a QR code to log the box in to Tailscale.
+set -u
+
+RUN=/run/myai
+ROOT=${MYAI_ROOT:-/srv/myai}
+MODELS_STATE=${MYAI_MODELS_STATE:-$ROOT/app/models/status.json}
+
+hostname_short() { hostname 2>/dev/null || cat /etc/hostname; }
+
+ts_json() { tailscale status --json --peers=false 2>/dev/null; }
+
+service_line() {
+    local unit=$1 label=$2 state
+    state=$(systemctl is-active "$unit" 2>/dev/null)
+    case "$state" in
+        active)     printf '  %-14s ok\n' "$label" ;;
+        activating) printf '  %-14s starting\n' "$label" ;;
+        *)          printf '  %-14s %s\n' "$label" "${state:-unknown}" ;;
+    esac
+}
+
+# Counts only, never file names: this screen may face a room.
+pipeline_line() {
+    local name=$1 input=$2 since=$3 log="$ROOT/output/$1/events.jsonl" done=0 failed=0
+    if [ -r "$log" ] && [ -n "$since" ]; then
+        done=$(jq -c --arg s "$since" 'select(.kind == "done" and .time >= $s)' "$log" 2>/dev/null | wc -l)
+        failed=$(jq -c --arg s "$since" 'select(.kind == "failed" and .time >= $s)' "$log" 2>/dev/null | wc -l)
+    fi
+    printf '  %-12s input/%s/ -> output/%s/   last 24 h: %s done, %s failed\n' "$name" "${input:-$name}" "$name" "$done" "$failed"
+}
+
+backup_line() {
+    local state="$ROOT/output/backup/state.json" last
+    if [ -r "$state" ]; then
+        last=$(jq -r '[.runs[] | select(.ok)] | last | .time // "never"' "$state" 2>/dev/null)
+        printf '  %-12s last successful backup: %s\n' "backup" "${last:-never}"
+    else
+        printf '  %-12s not configured (services.myai.backup.target)\n' "backup"
+    fi
+}
+
+print_status() {
+    echo "=== myAI box: $(hostname_short) ==="
+    if [ -r "$RUN/report.txt" ]; then
+        cat "$RUN/report.txt"
+    else
+        echo "  (hardware probe has not run yet)"
+    fi
+    echo
+    echo "Models"
+    if [ -r "$MODELS_STATE" ]; then
+        jq -r 'to_entries[] | "  \(.key): \(.value)"' "$MODELS_STATE" 2>/dev/null
+    else
+        echo "  not fetched yet (needs internet on first boot)"
+    fi
+    echo
+    echo "Folders ($ROOT)"
+    echo "  app/     what runs (written only by the update manager)"
+    echo "  input/   put files here; output/ holds the results"
+    local def name since
+    since=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
+    for def in "$ROOT"/app/pipelines/*.json; do
+        [ -e "$def" ] || continue
+        name=$(basename "$def" .json)
+        pipeline_line "$name" "$(jq -r '.input // empty' "$def" 2>/dev/null)" "$since"
+    done
+    backup_line
+    echo
+    echo "Services"
+    service_line vts.service "transcription"
+    service_line ollama.service "AI model"
+    service_line nginx.service "web app"
+    service_line tailscaled.service "tailscale"
+    echo
+    echo "Reach it"
+    local js state dns
+    js=$(ts_json)
+    state=$(jq -r '.BackendState // empty' <<<"$js" 2>/dev/null)
+    dns=$(jq -r '.Self.DNSName // empty' <<<"$js" 2>/dev/null | sed 's/\.$//')
+    if [ "$state" = "Running" ] && [ -n "$dns" ]; then
+        echo "  anywhere: https://$dns   (devices on your tailnet, phones included)"
+    else
+        echo "  anywhere: Tailscale not logged in (${state:-not running})."
+        echo "            Press [L] on the box's screen, or put tailscale-authkey.txt in"
+        echo "            the myai folder of the boot partition and reboot."
+    fi
+    if systemctl is-active --quiet nginx.service && [ -e /etc/myai/lan-enabled ]; then
+        local ip
+        for ip in $(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1); do
+            echo "  this network: https://$ip   (self-signed certificate; the browser asks once)"
+        done
+        echo "  this network: https://$(hostname_short).local"
+    fi
+}
+
+tailscale_login() {
+    clear
+    echo "Scan the code with your phone (or open the link) and log in to Tailscale."
+    echo "The box joins your tailnet as $(hostname_short). Ctrl-C to go back."
+    echo
+    sudo -n /run/current-system/sw/bin/tailscale up --qr --timeout=10m || true
+    sleep 2
+}
+
+if [ "${1:-}" = "--console" ]; then
+    trap '' INT TSTP QUIT
+    while true; do
+        clear
+        print_status
+        echo
+        echo "[L] log in to Tailscale   (refreshes every 10 s)"
+        if read -r -s -n 1 -t 10 key; then
+            case "$key" in
+                l|L) trap - INT; tailscale_login; trap '' INT ;;
+            esac
+        fi
+    done
+else
+    print_status
+fi
