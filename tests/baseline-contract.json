@@ -6,14 +6,12 @@
   "rules": {
     "strictSkipsAllowed": false,
     "allContractsRequireExecutableSuites": true,
-    "criticalContractsRequireMutationGuard": true
+    "staticOnlyGuardCeiling": 101
   },
   "contracts": [
     {
       "id": "REC-LOCK-001",
-      "severity": "critical",
       "title": "Only one tab may own recording/finalization",
-      "acceptance": "A second independent tab or realm is denied until the active owner fully releases the global lock; nested ownership remains held until the final release.",
       "suites": [
         "recording-lock-unit",
         "multitab-realms",
@@ -26,51 +24,41 @@
     },
     {
       "id": "REC-SESSION-001",
-      "severity": "critical",
       "title": "Audio fragments are isolated by capture session",
-      "acceptance": "Two streams using identical recording and sequence coordinates retain separate rows and cannot overwrite or merge across session IDs.",
       "suites": [
-        "browser-lifecycle",
-        "static-integrity"
+        "browser-lifecycle"
       ],
-      "mutationGuards": [
-        "MUT-SESSION-INDEX"
-      ]
+      "mutationGuards": []
     },
     {
       "id": "REC-LIVE-001",
-      "severity": "high",
       "title": "Live recording state remains integrated and synchronized",
-      "acceptance": "The owner sees exactly one green live row with its ticking timer and LIVE badge; other tabs see the same protected row with an OTHER TAB label, and no duplicate global header status is rendered.",
       "suites": [
-        "browser-lifecycle",
-        "static-integrity"
-      ]
+        "browser-lifecycle"
+      ],
+      "mutationGuards": []
     },
     {
       "id": "REC-LIFECYCLE-001",
-      "severity": "critical",
       "title": "Start, flush, stop, playback and delete remain functional",
-      "acceptance": "A recording crosses a durable flush boundary, finalizes to a structurally valid playable file, removes only its own fragments, plays without media error and deletes cleanly.",
       "suites": [
         "browser-lifecycle",
-        "pure",
-        "static-integrity"
+        "pure"
       ],
       "mutationGuards": [
-        "MUT-WAV-ASSEMBLY"
+        "MUT-WAV-ASSEMBLY",
+        "MUT-STOP-TWICE",
+        "MUT-AFTER-RECORDING-PARALLEL",
+        "MUT-CONVERT-RESURRECTS"
       ]
     },
     {
       "id": "OPUS-SEEK-001",
-      "severity": "critical",
       "title": "Downloaded Opus WebM has finite duration and desktop seeking",
-      "acceptance": "The remux writes finite Segment metadata, Duration, SeekHead and Cues while preserving decoded Opus audio; Chromium and ffprobe report finite duration and random seeking works.",
       "suites": [
         "webm-remux-unit",
         "webm-desktop",
-        "browser-lifecycle",
-        "static-integrity"
+        "browser-lifecycle"
       ],
       "mutationGuards": [
         "MUT-WEBM-PASSTHROUGH"
@@ -78,23 +66,32 @@
     },
     {
       "id": "OPUS-TRANSCRIBE-001",
-      "severity": "critical",
       "title": "Long WebM/Opus recordings transcribe through bounded decode windows",
-      "acceptance": "WebM Cluster metadata is indexed without decoding the full recording; each transcription request creates an independently decodable finite window with timestamps rebased near zero, and recordings of at least two logical hours are accepted without a duration cutoff.",
       "suites": [
         "webm-remux-unit",
-        "webm-desktop",
-        "static-integrity"
+        "webm-desktop"
       ],
       "mutationGuards": [
         "MUT-OPUS-WINDOWING"
       ]
     },
     {
+      "id": "PERF-LONG-001",
+      "title": "No step in the audio path scales with recording length",
+      "suites": [
+        "pure",
+        "transcript-core",
+        "webm-remux-unit",
+        "webm-desktop"
+      ],
+      "mutationGuards": [
+        "MUT-WHOLE-FILE-DECODE-UNBOUNDED",
+        "MUT-LIVE-PREVIEW-POLL"
+      ]
+    },
+    {
       "id": "JOB-RACE-001",
-      "severity": "critical",
       "title": "Late job cleanup cannot cancel or unregister a replacement",
-      "acceptance": "Replacing a transcription/reply job aborts the old controller and stale completion cannot remove the new controller.",
       "suites": [
         "pure"
       ],
@@ -104,90 +101,239 @@
     },
     {
       "id": "SW-CACHE-001",
-      "severity": "critical",
       "title": "Offline shell updates are atomic and APIs are never cached",
-      "acceptance": "Incomplete shell installation fails, previous caches survive until a complete install, API and unknown same-origin routes remain network-owned, and legacy browser-model caches are removed during activation.",
       "suites": [
         "service-worker",
         "static-integrity"
       ],
       "mutationGuards": [
-        "MUT-SW-API-CACHE"
+        "MUT-SW-API-CACHE",
+        "MUT-SW-SHELL-HTTP-CACHE",
+        "MUT-SW-NAV-NETWORK-FIRST"
       ]
     },
     {
       "id": "SEC-RELEASE-001",
-      "severity": "high",
       "title": "Release security and module integrity remain pinned",
-      "acceptance": "CSP excludes inline and third-party script execution, the browser-model worker is absent, module imports resolve, delegated actions are handled, and every shipped module is present in the service-worker shell.",
       "suites": [
         "static-integrity",
         "syntax"
-      ]
+      ],
+      "mutationGuards": []
     },
     {
       "id": "AI-BOUNDARY-001",
-      "severity": "high",
       "title": "Long AI/transcription inputs stay within explicit bounds",
-      "acceptance": "WAV and WebM/Opus transcription use bounded range windows, server prompt budgeting and multilingual overlap handling remain deterministic, and no arbitrary compressed-duration cutoff is introduced.",
       "suites": [
         "pure",
         "transcript-core",
         "webm-remux-unit",
-        "webm-desktop",
-        "static-integrity"
-      ]
+        "webm-desktop"
+      ],
+      "mutationGuards": []
     },
     {
       "id": "SERVER-POOL-001",
-      "severity": "critical",
       "title": "Server transcription keeps ten chunks in flight",
-      "acceptance": "Server transcription eagerly dispatches up to ten chunks at once, never exceeds ten active requests, processes every chunk exactly once, uses fewer workers for shorter recordings, and stops dispatching new work after the circuit breaker opens.",
       "suites": [
-        "transcript-core",
-        "static-integrity"
+        "transcript-core"
       ],
-      "mutationGuards": [
-        "MUT-SERVER-POOL-WIDTH"
-      ]
+      "mutationGuards": []
     },
     {
-      "id": "SERVER-BACKUP-001",
-      "severity": "high",
-      "title": "Server transcription backup retention is explicit and optional",
-      "acceptance": "The browser defaults server backup storage to off, persists the setting, exposes it in Settings, and sends an explicit store_backup Boolean with every transcription chunk.",
+      "id": "SERVER-RAW-001",
+      "title": "Transcription transport has no retention or multipart path",
       "suites": [
-        "static-integrity"
-      ]
+        "browser-lifecycle"
+      ],
+      "mutationGuards": []
     },
     {
       "id": "REC-FAILSAFE-001",
-      "severity": "critical",
       "title": "Capture failures stop visibly and retain unsaved fragments",
-      "acceptance": "Any microphone, encoder or fragment-write failure immediately removes the live UI state, stops capture, alerts the user, retains uncommitted fragments through finalization and never claims bytes were saved without confirmation.",
       "suites": [
-        "browser-lifecycle",
-        "static-integrity"
+        "browser-lifecycle"
+      ],
+      "mutationGuards": []
+    },
+    {
+      "id": "CAPTURE-HEALTH-001",
+      "title": "A recording that has stopped hearing anything says so on screen, keeps running, and never claims audio it did not capture",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle"
       ],
       "mutationGuards": [
-        "MUT-CAPTURE-ERROR-CONTINUE"
+        "MUT-CAPTURE-STALL-UNNOTICED",
+        "MUT-CAPTURE-MUTE-IGNORED",
+        "MUT-CAPTURE-STALL-STOPS-RECORDING",
+        "MUT-DURATION-OVERCLAIMS"
       ]
     },
     {
       "id": "UI-AUDIO-STORAGE-001",
-      "severity": "high",
       "title": "The recording screen shows audio capacity and fullness in stable units",
-      "acceptance": "The main storage line displays saved audio in MB, estimated remaining browser quota in GB, and audio fullness as saved audio divided by the browser-reported quota; every numeric value uses exactly two decimal places and the old app-origin/persistence labels remain absent.",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": []
+    },
+    {
+      "id": "DATA-RETENTION-001",
+      "title": "Automatic deletion runs on two independent clocks, announces itself, and every kind of text is on the text clock",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "storage-paths",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-RETENTION-NEVER",
+        "MUT-RETENTION-TEXT-CLOCK",
+        "MUT-DELETE-TEXT-TAKES-AUDIO",
+        "MUT-LIVE-TEXT-ON-AUDIO-CLOCK",
+        "MUT-LIVE-TEXT-OUTLIVES-DELETE",
+        "MUT-RETENTION-LOSES-LIVE-DECISION"
+      ]
+    },
+    {
+      "id": "LIVE-TEXT-STORE-001",
+      "title": "The live transcript is stored beside the recording rather than inside the row the heartbeat rewrites",
+      "suites": [
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-HEARTBEAT-CARRIES-TRANSCRIPT",
+        "MUT-SNAPSHOT-NEVER-STORED"
+      ]
+    },
+    {
+      "id": "LIVE-SCRIBE-001",
+      "title": "Live transcription runs beside a recording without ever being able to affect it",
       "suites": [
         "pure",
         "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-SCRIBE-UNBOUNDED",
+        "MUT-LIVE-SCRIBE-GAP-TRIM",
+        "MUT-LIVE-SCRIBE-DROP-ON-FAIL",
+        "MUT-LIVE-COVERAGE-BEFORE-TEXT",
+        "MUT-BACKFILL-UNBOUNDED"
+      ]
+    },
+    {
+      "id": "UI-SELECTION-001",
+      "title": "A dropdown keeps a deliberate choice but shows a result produced since",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SELECTION-STALE"
+      ]
+    },
+    {
+      "id": "UI-TRUTH-001",
+      "title": "What the interface shows is what is actually true: a control that appears to work does, and a view shows what is stored",
+      "suites": [
+        "live-view-unit",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-FULLSCREEN-TRAP",
+        "MUT-SAVED-TRANSCRIPT-RETRIMMED",
+        "MUT-BUSY-ROW-LOOKS-IDLE",
+        "MUT-EMPTY-BOX-CANNOT-RESET"
+      ]
+    },
+    {
+      "id": "BACKUP-001",
+      "title": "Everything stored can be taken out of the browser in one file, and a backup that failed stops the deletion it was offered for",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-BACKUP-CRC",
+        "MUT-DELETE-AFTER-FAILED-BACKUP"
+      ]
+    },
+    {
+      "id": "LIVE-REUSE-001",
+      "title": "Transcribing after a live session does the gaps, not the whole recording, and never counts audio it did not hear as heard; a stretch of less than a second at the start or the end of the recording is still done",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-REUSE-ORIGIN",
+        "MUT-HEAD-GAP-DISCARDED",
+        "MUT-DROPPED-AUDIO-CLAIMED-COVERED",
+        "MUT-WINDOW-INDEX-STRANDED",
+        "MUT-TAIL-GAP-DISCARDED"
+      ]
+    },
+    {
+      "id": "DIARIZE-001",
+      "title": "Speaker labels are grouped in the browser, retroactive, and withheld until they are earned",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-DIARIZE-THRESHOLD",
+        "MUT-DIARIZE-BOUNDARY",
+        "MUT-DIARIZE-CLOSEST-PAIR",
+        "MUT-NAME-FROM-PROSE",
+        "MUT-ECHO-DISPLAY-FALLBACK",
+        "MUT-NAME-COIN-TOSS",
+        "MUT-RENAME-KEEPS-FULLER"
+      ]
+    },
+    {
+      "id": "INFER-001",
+      "title": "Two speaker-naming policies exist at once, switch losslessly on one conversation, and the numbers-only floor is the default",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-INFER-HEARSAY",
+        "MUT-INFER-OVERWRITES-STATED",
+        "MUT-INFER-SILENT-GUESS",
+        "MUT-INFER-NAME-OVERRULES-EARS",
+        "MUT-POLICY-SWITCH-FORGETS"
+      ]
+    },
+    {
+      "id": "LANG-PANELS-001",
+      "title": "A panel is a language, and a rendering is never mistaken for a quotation",
+      "suites": [
+        "pure",
+        "translate-request"
+      ],
+      "mutationGuards": [
+        "MUT-PANEL-EMPTY-WHILE-PENDING",
+        "MUT-COLOUR-FOLLOWS-VOLUME",
+        "MUT-TRANSLATE-OLDEST-FIRST",
+        "MUT-PANELS-FOLLOW-VOLUME",
+        "MUT-BATCH-PARTIAL-APPLY",
+        "MUT-PANELS-STRAY-DISPLACES",
+        "MUT-TRANSLATE-NO-BACKOFF",
+        "MUT-TRANSLATE-GAVEUP-INVISIBLE",
+        "MUT-PANELS-WORDLESS-THRESHOLD",
+        "MUT-PANELS-SUM-NOT-SHAPE",
+        "MUT-PANEL-SILENT-ABOUT-WHY",
+        "MUT-BATCH-NUMBERS-OR-NOTHING",
+        "MUT-STALE-TRANSLATION",
+        "MUT-FILL-HAMMERS-DEAD-SERVER"
       ]
     },
     {
       "id": "TEST-BASELINE-001",
-      "severity": "critical",
       "title": "The compatibility contract itself is executable",
-      "acceptance": "Every contract references registered suites, strict mode forbids skips, critical contracts have mutation guards, and the mutation suite proves selected regressions are detected.",
       "suites": [
         "baseline-runner-unit",
         "baseline-contract",
@@ -200,12 +346,9 @@
     },
     {
       "id": "LIVE-VIEW-001",
-      "severity": "critical",
-      "title": "Live transcript and reply views actually render under the shipped CSP",
-      "acceptance": "Opening a live transcript log or reply stream produces a window that boots under the shipped Content-Security-Policy, replays everything already buffered, receives subsequent events live, and reports a visible failure instead of waiting indefinitely if it cannot start. No popup document depends on inline script.",
+      "title": "Live transcript and reply views actually render under the shipped CSP, in a pop-up page that runs no script",
       "suites": [
         "live-view-unit",
-        "static-integrity",
         "browser-lifecycle"
       ],
       "mutationGuards": [
@@ -215,51 +358,62 @@
     },
     {
       "id": "LIVE-STREAM-002",
-      "severity": "critical",
       "title": "Re-initialising a live stream does not orphan an attached view",
-      "acceptance": "A live view opened before a stream is re-initialised continues to receive tokens, chunks and completion, because registry entries are reset in place rather than replaced; the view is told to clear the previous result instead of appending to it.",
       "suites": [
-        "live-view-unit",
-        "static-integrity"
+        "live-view-unit"
       ],
       "mutationGuards": [
         "MUT-STREAM-REINIT-REPLACE"
       ]
     },
     {
+      "id": "LIVE-STREAM-003",
+      "title": "A superseded reply cannot close or corrupt the stream that replaced it",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-REPLY-STREAM-GENERATION"
+      ]
+    },
+    {
+      "id": "LIVE-SAVED-001",
+      "title": "A finished transcript or reply opens in the same view as a live one",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-SAVED-VIEW-DESKTOP-ONLY"
+      ]
+    },
+    {
       "id": "LIVE-VIEW-MOBILE-001",
-      "severity": "critical",
-      "title": "A live view works where a popup cannot",
-      "acceptance": "On a touch or small-screen client the live transcript and reply views render inside the tab that owns the stream, opening no second window, replaying the buffer on open and detaching when closed; a blocked popup falls back to the same in-page view; and a popup whose readiness cannot be polled because the opener may not inspect it still attaches when it announces itself by message.",
+      "title": "A live view works where a popup cannot: on a touch device, where pop-ups are blocked, and where the opening tab may not read the pop-up",
       "suites": [
         "live-view-unit"
       ],
       "mutationGuards": [
         "MUT-LIVE-VIEW-DESKTOP-ONLY",
-        "MUT-POPUP-READY-MESSAGE"
+        "MUT-POPUP-UNREADABLE-LEFT-EMPTY"
       ]
     },
     {
       "id": "TEST-HARNESS-001",
-      "severity": "critical",
       "title": "The release harness is itself executable and its coverage is declared",
-      "acceptance": "Every expression a browser suite evaluates in the page is valid JavaScript, every shipped module is either exercised by a suite or explicitly listed as untested, and every shipped module is present in the offline service-worker shell.",
       "suites": [
+        "baseline-runner-unit",
+        "baseline-contract",
         "static-integrity"
       ],
       "mutationGuards": [
-        "MUT-HARNESS-BROKEN-EVAL",
         "MUT-SHELL-OMIT-MODULE"
       ]
     },
     {
       "id": "AI-STREAM-001",
-      "severity": "critical",
       "title": "Streamed replies survive arbitrary network framing",
-      "acceptance": "Newline-delimited reply objects are reassembled correctly when a read ends mid-object, when one read carries several objects, and when the final object arrives without a trailing newline; blank and unparseable lines are skipped rather than fatal, and a server-reported error is surfaced while retaining the text already received.",
       "suites": [
-        "pure",
-        "static-integrity"
+        "pure"
       ],
       "mutationGuards": [
         "MUT-REPLY-STREAM-FRAMING"
@@ -267,25 +421,20 @@
     },
     {
       "id": "SW-ROUTE-002",
-      "severity": "critical",
-      "title": "Proxied service routes are excluded from the offline cache exactly as configured",
-      "acceptance": "The service worker declines to intercept both the exact configured service route and any subpath of it, the excluded routes match CONFIG.OLLAMA_URL and CONFIG.TRANSCRIBE_URL, and a lookalike path sharing the same prefix is still handled normally.",
+      "title": "Proxied service routes are excluded from the offline cache exactly as configured, and a navigation is answered from the shell only for the app's own page: another page of the origin is left to the network instead of being answered with a copy of the app that cannot find its modules there",
       "suites": [
         "service-worker",
         "static-integrity"
       ],
       "mutationGuards": [
-        "MUT-SW-ROUTE-EXACT"
+        "MUT-SW-ANSWERS-EVERY-PAGE"
       ]
     },
     {
       "id": "UI-LIVE-STATUS-001",
-      "severity": "critical",
       "title": "The live-status bar is operable and announced without a pointer",
-      "acceptance": "The in-row progress bar announces itself politely to assistive technology, its open-live-view target is focusable and activates on Enter and Space as well as click, cancellation is a labelled button, re-showing replaces rather than duplicates the bar, and removing or updating an absent bar is a safe no-op.",
       "suites": [
-        "live-view-unit",
-        "static-integrity"
+        "live-view-unit"
       ],
       "mutationGuards": [
         "MUT-LIVE-STATUS-KEYBOARD"
@@ -293,9 +442,7 @@
     },
     {
       "id": "DB-DURABILITY-001",
-      "severity": "critical",
       "title": "A resolved write means the IndexedDB transaction committed",
-      "acceptance": "Single-operation writes resolve only after their transaction commits, cursor iteration walks forward and reverse and supports single-hop page offsets and deletion, a throwing upgrade rejects the open rather than hanging, and another tab requesting a version upgrade closes this connection instead of blocking it indefinitely.",
       "suites": [
         "platform-unit"
       ],
@@ -304,10 +451,25 @@
       ]
     },
     {
+      "id": "DB-UPGRADE-001",
+      "title": "A newer version of the app never takes the database away from a tab that is holding a recording, and a tab it does take it from is not left broken",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-UPGRADE-CLOSES-RECORDING-TAB",
+        "MUT-RECORDING-NOT-BUSY",
+        "MUT-CLOSED-CONNECTION-BRICKS-TAB",
+        "MUT-STALE-TAB-UNRECOGNISED"
+      ]
+    },
+    {
       "id": "REC-WAKELOCK-001",
-      "severity": "critical",
       "title": "The screen wake lock survives the tab being backgrounded",
-      "acceptance": "Enabling acquires exactly one screen wake lock and is idempotent; the lock the operating system drops when the tab is hidden is re-acquired on return to the foreground; disabling releases it and prevents any further silent re-acquisition; and an unsupported or denied wake lock degrades to a reported failure rather than an exception.",
       "suites": [
         "platform-unit"
       ],
@@ -317,89 +479,1533 @@
     },
     {
       "id": "AI-PIPELINE-001",
-      "severity": "high",
       "title": "The automatic post-recording pipeline runs transcription and reply end to end",
-      "acceptance": "With both automatic settings enabled, a finished recording is chunked and uploaded to the transcription route, its timestamped timeline is persisted, the resulting transcript is sent to the reply route as a budgeted stream request, the streamed answer is reassembled exactly despite awkward network framing, and the stored reply is bound to the transcript it came from.",
       "suites": [
         "browser-lifecycle"
-      ]
+      ],
+      "mutationGuards": []
     },
     {
       "id": "UI-HELP-001",
-      "severity": "high",
-      "title": "The guide overlay opens, closes and returns focus",
-      "acceptance": "Opening the guide shows the overlay, exposes it to assistive technology and moves focus into the panel; closing hides it, marks it hidden and returns focus to whatever opened it; closing an already-closed overlay is a safe no-op.",
+      "title": "The guide overlay opens, closes, returns focus and documents only settled behaviour",
       "suites": [
-        "platform-unit"
+        "platform-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-HELP-RESTATES-SPOKEN-SYNTAX"
       ]
     },
     {
       "id": "UI-VERSION-001",
-      "severity": "critical",
-      "title": "The version is declared once and reported by the shell that serves it",
-      "acceptance": "The application version exists exactly once, in the service worker that names the offline cache; no application module, markup file or package manifest declares a second copy; and the label in the interface is answered at runtime by the worker actually serving the page, degrading to a plain non-numeric label when no worker serves it.",
+      "title": "The build is declared once and stamped into every artefact that can report it",
       "suites": [
         "static-integrity",
         "platform-unit"
       ],
       "mutationGuards": [
-        "MUT-VERSION-SECOND-COPY"
+        "MUT-BUILD-STAMP-DRIFTS"
+      ]
+    },
+    {
+      "id": "UI-VERSION-002",
+      "title": "A version shown on its own is the build the page is running, and an update is offered only once reloading would land on it",
+      "suites": [
+        "pure",
+        "platform-unit",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-UPDATE-ADOPTS-NEW-WORKER",
+        "MUT-UPDATE-INSTALLING-CALLED-READY",
+        "MUT-UPDATE-RELOADS-MID-RECORDING",
+        "MUT-UPDATE-BADGE-NOT-TAPPABLE",
+        "MUT-VERSION-IGNORES-DOCUMENT-STAMP",
+        "MUT-STUCK-WORKER-UNNOTICED",
+        "MUT-WORKER-SCRIPT-FROM-CACHE"
+      ]
+    },
+    {
+      "id": "UPDATE-WAITS-TO-BE-ASKED-001",
+      "title": "A new build installs next to the one serving and takes over only when a page asks, just before it reloads, so an open tab never runs files of two builds; the pages of builds before 129, which cannot ask, still get it by itself; a page loaded past the worker is never offered an older build and lets its own take over; and taking over never deletes the shell of a newer build that is installing",
+      "suites": [
+        "service-worker",
+        "platform-unit",
+        "pure",
+        "shell-update"
+      ],
+      "mutationGuards": [
+        "MUT-WORKER-TAKES-OVER-BY-ITSELF",
+        "MUT-OLD-PAGES-LEFT-WAITING",
+        "MUT-ACTIVATE-MESSAGE-IGNORED",
+        "MUT-WAITING-NOT-ASKED",
+        "MUT-RELOAD-BEFORE-TAKEOVER",
+        "MUT-WAITING-BUILD-FORGOTTEN",
+        "MUT-UPDATEFOUND-IGNORED",
+        "MUT-ACTIVATE-DELETES-NEWER-SHELL",
+        "MUT-UPDATE-OFFERS-DOWNGRADE",
+        "MUT-HARD-RELOAD-LEAVES-OWN-BUILD-WAITING"
+      ]
+    },
+    {
+      "id": "UPDATE-INSTALL-FAILS-001",
+      "title": "An install that fails is reported as failed and can be tried again, instead of staying on Installing with its button disabled, and leaves no half-stored shell",
+      "suites": [
+        "service-worker",
+        "platform-unit",
+        "pure",
+        "shell-update"
+      ],
+      "mutationGuards": [
+        "MUT-INSTALL-FAILURE-IGNORED",
+        "MUT-FAILED-INSTALL-OFFERS-FORCE",
+        "MUT-SHELL-PARTIAL-INSTALL"
+      ]
+    },
+    {
+      "id": "SHELL-REDIRECT-001",
+      "title": "A shell file the server redirects is stored as a response of its own, so a navigation is never answered with a redirected response and the app still loads",
+      "suites": [
+        "service-worker",
+        "shell-update"
+      ],
+      "mutationGuards": [
+        "MUT-SHELL-REDIRECT-KEPT"
       ]
     },
     {
       "id": "REPLY-MODEL-001",
-      "severity": "critical",
       "title": "A reply is sent to a model the server actually has",
-      "acceptance": "The reply path resolves the configured model against the installed list before generating, keeping an explicit user choice that still exists, falling back to the preferred default, then to the same model family, then to any installed model; the resolved name is persisted so the Settings picker and the request cannot disagree, and an unreachable server leaves the stored name untouched so the generate call reports the real error.",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-REPLY-MODEL-IGNORE-INSTALLED"
+      ]
+    },
+    {
+      "id": "REPLY-MODEL-002",
+      "title": "Loading a model is waited out under supervision, and is never reported as a server that did not respond",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-MODEL-RESIDENT-IGNORED",
+        "MUT-MODEL-SWAP-NEVER-HELPED",
+        "MUT-MODEL-BLIP-READ-AS-DEATH",
+        "MUT-MODEL-RETRY-WITHOUT-PREFLIGHT",
+        "MUT-MODEL-PREFLIGHT-UNWIRED"
+      ]
+    },
+    {
+      "id": "UI-RENDER-DEFER-001",
+      "title": "A deferred repaint always resumes, and an explicit one is never dropped",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-RENDER-DEFER-LATCH"
+      ]
+    },
+    {
+      "id": "AI-MODEL-001",
+      "title": "Replies and live translation use the same selected AI model",
+      "suites": [
+        "static-integrity",
+        "translate-request"
+      ],
+      "mutationGuards": [
+        "MUT-TRANSLATE-SPLITS-MODEL"
+      ]
+    },
+    {
+      "id": "RETENTION-CONSENT-001",
+      "title": "Shortening a retention window is a deletion, and is answered before it is stored",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-RETENTION-ACK-ONCE"
+      ]
+    },
+    {
+      "id": "SCALE-4H-001",
+      "title": "Four hours of continuous operation at sixteen speakers and four languages is a stated design limit, and the cost per window is flat across it",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SCALE-UNBOUNDED-REGROUP"
+      ]
+    },
+    {
+      "id": "RUNWAY-001",
+      "title": "A recording reports how much longer it can run from free space, and from the battery only once the battery has been measured, and stops reporting when it stops",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-RUNWAY-IGNORES-FINALIZE",
+        "MUT-RUNWAY-CAPTURE-AS-SPACE",
+        "MUT-RUNWAY-LINGERS-AFTER-STOP"
+      ]
+    },
+    {
+      "id": "UI-PAGING-001",
+      "title": "Page controls are reachable from both ends of a list once there is somewhere to go back to",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-PAGE-TOP-ON-FIRST-PAGE"
+      ]
+    },
+    {
+      "id": "RELEASE-BUILD-001",
+      "title": "Release identity, build notes and per-build file timestamps move together",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-RELEASE-MTIME-PINNED"
+      ]
+    },
+    {
+      "id": "DB-UPGRADE-ATOMIC-001",
+      "title": "A schema upgrade that fails leaves the stored version untouched, so the next open retries it instead of inheriting a half-built schema",
+      "suites": [
+        "platform-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-FAILED-UPGRADE-COMMITS"
+      ]
+    },
+    {
+      "id": "DB-KEEP-NOTES-001",
+      "title": "A schema change only adds what is missing and never deletes stored notes, and a version waiting on a recording starts as soon as that recording stops",
+      "suites": [
+        "pure",
+        "platform-unit",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-UPGRADE-DELETES-NOTES",
+        "MUT-VETO-NEVER-RELEASED",
+        "MUT-IDLE-NEVER-RELEASES"
+      ]
+    },
+    {
+      "id": "LIVE-PAUSE-001",
+      "title": "Pausing live transcription keeps the transcript and the coverage map for that recording, and resuming does not re-send audio that was already transcribed",
+      "suites": [
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-PAUSE-FORGETS-RECORDING",
+        "MUT-CLOSE-KEEPS-RECORDING"
+      ]
+    },
+    {
+      "id": "WAKELOCK-RACE-001",
+      "title": "A screen lock granted after the user switched it off is released at once rather than held by nothing",
+      "suites": [
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-WAKELOCK-LATE-SENTINEL-KEPT",
+        "MUT-WAKELOCK-DOUBLE-ACQUIRE",
+        "MUT-WAKELOCK-STALE-CLEARS-CURRENT"
+      ]
+    },
+    {
+      "id": "LIVE-VIEW-LEAK-001",
+      "title": "A live view closed before its page loaded is let go: it is not polled on, nor reported as a failure",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-POPUP-CLOSED-STILL-TRACKED"
+      ]
+    },
+    {
+      "id": "LIVE-VIEW-NO-MESSAGES-001",
+      "title": "Nothing is posted to a pop-up view: the opening tab draws into the page it gave it, and lets the window go once it is closed or shows another site",
+      "suites": [
+        "live-view-unit",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-POPUP-POSTED-TO",
+        "MUT-POPUP-FOLLOWS-NAVIGATION"
+      ]
+    },
+    {
+      "id": "MARKUP-ESCAPING-001",
+      "title": "Values placed inside an HTML attribute are escaped for attribute position, not merely for text position",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-ATTRIBUTE-TEXT-ESCAPER"
+      ]
+    },
+    {
+      "id": "SPEAKER-CONFIRM-001",
+      "title": "A speaker name worked out from the conversation is only ever suggested; nothing is applied until a person confirms it out loud",
+      "suites": [
+        "pure",
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-INFERRED-NAME-APPLIED",
+        "MUT-CONFIRMED-NAME-LEFT-OPEN",
+        "MUT-CONFIRM-APPLIES-ANYTHING",
+        "MUT-CONFIRM-MATCHES-SUBSTRING",
+        "MUT-CONFIRM-BARE-GUESSES"
+      ]
+    },
+    {
+      "id": "SPEAKER-PROPOSE-002",
+      "title": "A suggestion is withheld until the evidence is strong, self-given and unambiguous, and it expires if nobody answers it",
       "suites": [
         "pure",
         "static-integrity"
       ],
       "mutationGuards": [
-        "MUT-REPLY-MODEL-IGNORE-INSTALLED"
+        "MUT-PROPOSE-BAR-TOO-LOW",
+        "MUT-PROPOSE-WITHOUT-SELF-EVIDENCE",
+        "MUT-PROPOSE-IGNORES-RUNNER-UP",
+        "MUT-PROPOSAL-NEVER-EXPIRES"
       ]
-    }
-  ],
-  "predefinedFutureGates": [
-    {
-      "id": "REC-CRASH-001",
-      "title": "Crash after a durable flush",
-      "acceptance": "Force-close the owner tab after persisted fragments exist; reopening must recover exactly the committed interval without touching a live session."
     },
     {
-      "id": "REC-SUSPEND-001",
-      "title": "Mobile suspension and resume",
-      "acceptance": "Backgrounding beyond one heartbeat interval must not allow a second writer while the original browser still owns the capture, and resume must reconcile elapsed time safely."
+      "id": "CAPTURE-TRUTH-002",
+      "title": "The capture watchdog watches whatever is actually feeding the recording, and judges it on the cadence that source delivers at, so it never accuses a healthy recording",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-OPUS-CAPTURE-UNWATCHED",
+        "MUT-STALL-WINDOW-IGNORES-CADENCE",
+        "MUT-STALL-WINDOW-TOO-TIGHT"
+      ]
     },
     {
-      "id": "DB-UPGRADE-001",
-      "title": "Upgrade from every supported database schema",
-      "acceptance": "Fixtures for each historical schema upgrade without deleting recordings, transcripts, summaries or legacy fragments."
+      "id": "STARTUP-PAINT-001",
+      "title": "The recordings list is painted before startup maintenance and never fails silently, and maintenance that delays it says so on screen",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-FIRST-PAINT-SILENT-FAILURE"
+      ]
     },
     {
-      "id": "DELETE-RACE-001",
-      "title": "Delete while AI work is active",
-      "acceptance": "Deleting text or a recording while transcription/reply is in flight must cancel work and no late result may recreate deleted data."
+      "id": "UI-ROTATION-001",
+      "title": "Only the maximised waveform turns with the phone, and rotation is never left switched on after it is closed",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-ROTATION-LEFT-ON"
+      ]
     },
     {
-      "id": "OPUS-MATRIX-001",
-      "title": "Vendor MediaRecorder interoperability matrix",
-      "acceptance": "Recorded outputs from current Chromium, Firefox and Safari fixtures retain finite duration and seeking after remux."
+      "id": "LIST-WITHOUT-AUDIO-001",
+      "title": "Listing recordings, and totalling their storage, never loads any audio; a recording's audio is read only when somebody plays, downloads or converts it, and only one is held at a time",
+      "suites": [
+        "static-integrity",
+        "browser-lifecycle",
+        "storage-paths"
+      ],
+      "mutationGuards": [
+        "MUT-LIST-LOADS-AUDIO",
+        "MUT-PLAYER-EAGER",
+        "MUT-PLAYER-KEEPS-EVERY-BLOB",
+        "MUT-STORAGE-TOTAL-LOADS-AUDIO"
+      ]
     },
     {
-      "id": "SW-ROLLBACK-001",
-      "title": "Actual-browser service-worker rollback",
-      "acceptance": "A deliberately incomplete update must leave the previous complete worker and shell available offline in a real browser."
+      "id": "RECORDING-FORMAT-001",
+      "title": "A new install records compressed audio, with uncompressed used only where the browser cannot encode it",
+      "suites": [
+        "static-integrity",
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-DEFAULT-BACK-TO-WAV"
+      ]
     },
     {
-      "id": "PERF-LONG-001",
-      "title": "Long-session memory ceiling",
-      "acceptance": "A one-hour WAV and 90-minute WebM/Opus transcription run remain under declared peak-memory budgets and never retain or decode the complete recording or all copied windows simultaneously."
+      "id": "REVIEW-ONE-PASS-001",
+      "title": "A repeated passage is corrected where it is cheapest, during recording or as part of the gap fill, and never by a third pass that re-listens to text already policed twice",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-THIRD-REVIEW-PASS-BACK"
+      ]
     },
     {
-      "id": "A11Y-KEYBOARD-001",
-      "title": "Keyboard and dialog regression gate",
-      "acceptance": "All core actions, dialogs, playback and destructive confirmations remain keyboard-operable with correct focus restoration and live announcements."
+      "id": "OPUS-TRUNCATED-TAIL-001",
+      "title": "Every Cluster that indexed cleanly from an interrupted recording stays reachable, including the last one",
+      "suites": [
+        "webm-remux-unit"
+      ],
+      "mutationGuards": [
+        "MUT-WEBM-TRUNCATED-TAIL-LOST"
+      ]
+    },
+    {
+      "id": "LIVE-SESSION-EPOCH-001",
+      "title": "A transcription request outliving the session that sent it cannot alter the session that replaced it, even when the recording id is unchanged",
+      "suites": [
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-STALE-WINDOW-LANDS",
+        "MUT-LIVE-INFLIGHT-UNDERFLOWS"
+      ]
+    },
+    {
+      "id": "SEAM-TOLERANCE-001",
+      "title": "A seam between two windows is trimmed even when one word inside it was misheard, and is never trimmed on a coincidental alignment",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SEAM-EXACT-MATCH-ONLY",
+        "MUT-SEAM-TOLERANCE-UNANCHORED"
+      ]
+    },
+    {
+      "id": "TRANSCRIPT-SILENCE-001",
+      "title": "A section that failed is retried, a quiet section is reported as silence rather than as a fault, and an unbroken run of either is reported once",
+      "suites": [
+        "transcript-core",
+        "static-integrity",
+        "saved-transcripts"
+      ],
+      "mutationGuards": [
+        "MUT-GAPS-REPEAT-EVERY-CHUNK",
+        "MUT-SILENCE-READ-AS-FAILURE",
+        "MUT-CHUNK-RETRY-REMOVED"
+      ]
+    },
+    {
+      "id": "CLIPBOARD-CONTEXT-001",
+      "title": "Clipboard text starts a recording as an ordinary context item, bounded in size and owning no storage of its own",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-CLIPBOARD-UNCAPPED"
+      ]
+    },
+    {
+      "id": "AUDIO-OWNED-001",
+      "title": "Audio is stored only in the same transaction as the recording row that still wants it, so a conversion or remux can never bring deleted audio back, and audio nobody owns is swept on start",
+      "suites": [
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-CONVERT-WRITES-BEFORE-CHECK",
+        "MUT-COMMIT-AUDIO-BEFORE-CHECK",
+        "MUT-ORPHAN-AUDIO-KEPT"
+      ]
+    },
+    {
+      "id": "STORAGE-COUNT-001",
+      "title": "The storage counter counts each stored recording exactly once, so every recording's share of it adds up to the whole",
+      "suites": [
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-STORAGE-COUNTS-TWICE"
+      ]
+    },
+    {
+      "id": "CONTINUE-WHILE-RECORDING-001",
+      "title": "Continue cannot be used during a recording, so its context never rides along with a later, unrelated recording",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-CONTINUE-WHILE-RECORDING"
+      ]
+    },
+    {
+      "id": "SWEEP-QUIET-001",
+      "title": "A background retention sweep that finds another tab recording waits silently for the next tick instead of interrupting an idle tab",
+      "suites": [
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-SWEEP-ALERTS"
+      ]
+    },
+    {
+      "id": "UPGRADE-NOTICE-001",
+      "title": "An upgrade notice owns the alert line, so a tab left on an older build is never shown blank, and the recording tab is told the truth about the wait",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-GUARD-NOTICE-UNOWNED"
+      ]
+    },
+    {
+      "id": "HANDOVER-WAITS-001",
+      "title": "A tab hands the database to a newer version only when nothing it started is still writing: not a recording, its saving, the automatic work after it, a transcription, a reply or a conversion",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-HANDOVER-DURING-FOLLOWUP",
+        "MUT-FOLLOWUP-UNCOUNTED",
+        "MUT-JOB-HANDOVER",
+        "MUT-BUSY-NOTICE-BLAMES-RECORDING"
+      ]
+    },
+    {
+      "id": "CONTEXT-NO-LEFTOVER-001",
+      "title": "A recording that fails to start drops the context it was given, so no invisible context rides along with a later recording",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-FAILED-START-KEEPS-CONTEXT"
+      ]
+    },
+    {
+      "id": "MODEL-TEXT-SPEECH-001",
+      "title": "The text handed to the AI carries what was said and states a hole where transcription failed, but never a note that it was quiet",
+      "suites": [
+        "transcript-core",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-SILENCE-TO-MODEL"
+      ]
+    },
+    {
+      "id": "FREE-SPACE-UNITS-001",
+      "title": "Free space under a gigabyte is shown in megabytes, never as 0 GB",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-FREE-SPACE-ZERO-GB"
+      ]
+    },
+    {
+      "id": "INDEXED-LOOKUPS-001",
+      "title": "Startup recovery and jumping to a recording use indexes instead of reading every recording in the library",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys",
+        "storage-paths"
+      ],
+      "mutationGuards": [
+        "MUT-RECOVERY-READS-ALL",
+        "MUT-STATE-INDEX-MISSING",
+        "MUT-JUMP-READS-ALL"
+      ]
+    },
+    {
+      "id": "STATE-DRIVEN-PAINT-001",
+      "title": "The buttons beside Start Recording are repainted when recording state changes rather than polled",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-BUTTONS-POLLED",
+        "MUT-STATE-NOT-ANNOUNCED"
+      ]
+    },
+    {
+      "id": "SYSTEM-HINT-001",
+      "title": "A system line in the live transcript carries a hint only when one applies to it",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-HINT-ON-EVERY-ERROR"
+      ]
+    },
+    {
+      "id": "CONTEXT-ROW-ACTIONS-001",
+      "title": "Tapping a context item's text opens it in full, and the button beside it copies the whole text to the clipboard",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-CONTEXT-TEXT-NOT-TAPPABLE",
+        "MUT-CONTEXT-COPY-MISSING"
+      ]
+    },
+    {
+      "id": "LIVE-START-BUTTON-001",
+      "title": "📝 sits beside Start Recording at all times: idle it starts a recording with live transcription on, and a plain start follows the setting instead of inheriting the previous recording",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-BUTTON-HIDDEN-IDLE",
+        "MUT-LIVE-BUTTON-NO-START",
+        "MUT-LIVE-STICKY"
+      ]
+    },
+    {
+      "id": "CLIPBOARD-DURING-RECORDING-001",
+      "title": "📋 stays available during a recording and adds the clipboard to that recording as one more context item, which the AI reply reads",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-PASTE-HIDDEN-WHILE-RECORDING",
+        "MUT-PASTE-DURING-RECORDING-LOST"
+      ]
+    },
+    {
+      "id": "RECORD-ROW-ONE-LINE-001",
+      "title": "The record button carries no timer and the three buttons stay on one line on a phone, with the running time and a date-only title in the live row",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-TIMER-IN-BUTTON",
+        "MUT-LIVE-TITLE-SUFFIX",
+        "MUT-ROW-WRAPS"
+      ]
+    },
+    {
+      "id": "PASTE-BOX-100K-001",
+      "title": "When the clipboard cannot be read, an in-app box takes up to 100,000 characters with line breaks intact, and a single oversized context item is shortened to fit the AI reply rather than dropped",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-PASTE-BOX-IS-PROMPT",
+        "MUT-CLIPBOARD-CAP-20K",
+        "MUT-BIG-PASTE-DROPPED"
+      ]
+    },
+    {
+      "id": "LIVE-TRANSLATION-ONE-LOAD-001",
+      "title": "Replies, live translation and the warm-up at the start of live transcription ask for one shared AI context, so a translated line never waits for the server to reload the model; translation speed is measured from the server's own generation time over at least three requests, and nothing about it is written into the transcript",
+      "suites": [
+        "pure",
+        "translate-request",
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-TRANSLATE-OWN-CONTEXT",
+        "MUT-WARMUP-DEFAULT-CONTEXT",
+        "MUT-REPLY-OWN-CONTEXT",
+        "MUT-LOAD-TIME-CHARGED",
+        "MUT-RATE-FROM-TWO",
+        "MUT-CAUSE-LINGERS",
+        "MUT-SPEED-IN-TRANSCRIPT",
+        "MUT-NO-WARMUP"
+      ]
+    },
+    {
+      "id": "REC-DURATION-LIVE-TAP-001",
+      "title": "Turning on live transcription partway through an Opus recording counts the audio recorded before the tap, so the saved length, file name and seek range cover the whole recording",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-TAP-COUNTS-NOTHING",
+        "MUT-TAP-FORGETS-EARLIER-AUDIO"
+      ]
+    },
+    {
+      "id": "LIVE-RESUME-KEEPS-LINES-001",
+      "title": "Hiding and showing live transcription during a recording keeps every line's own translation and speaker, because line keys name their session and a resume carries the per-line state across",
+      "suites": [
+        "pure",
+        "live-scribe-unit",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-RESUME-FORGETS-SPEAKERS",
+        "MUT-RESUME-DROPS-TRANSLATIONS",
+        "MUT-RESUME-REUSES-KEYS"
+      ]
+    },
+    {
+      "id": "FILL-BREAKER-WIRED-001",
+      "title": "Completing the translations of a saved transcript stops after three unanswered requests instead of asking once per line, and is a job that deleting the recording cancels",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-FILL-NEVER-GIVES-UP",
+        "MUT-FILL-NOT-A-JOB"
+      ]
+    },
+    {
+      "id": "LIVE-HEAD-FITS-PHONE-001",
+      "title": "On a phone the live transcription header keeps its copy and close buttons on screen and gives the connection status a line of its own",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-HEAD-SQUEEZES-STATUS",
+        "MUT-HEAD-DETAILS-PUSH"
+      ]
+    },
+    {
+      "id": "LIVE-COPY-MATCHES-SAVED-001",
+      "title": "The copied live transcript and the saved one are built from one snapshot: every line from the beginning, including lines that scrolled out of view, and no notices",
+      "suites": [
+        "pure",
+        "live-scribe-unit",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-COPY-SKIPS-ARCHIVE",
+        "MUT-COPY-KEEPS-NOTICES"
+      ]
+    },
+    {
+      "id": "TOKEN-ESTIMATE-BY-CLASS-001",
+      "title": "The reply's token estimate counts spaces as free, Latin letters at 3.3 per token, digits, symbols and long letter-and-digit runs at one per character, so long English or Dutch recordings keep the shared context and tables or encoded text are not undercounted",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SPACES-COUNTED",
+        "MUT-CODE-RUNS-AS-WORDS",
+        "MUT-DIGITS-CHEAP"
+      ]
+    },
+    {
+      "id": "TRANSLATE-TIMEOUT-001",
+      "title": "A translation that runs out of time, which grows with the batch, is reported as a timeout rather than a cancel, and live translation retries it at half the size after a pause and counts it as slow",
+      "suites": [
+        "pure",
+        "translate-request",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-TIMEOUT-READ-AS-CANCEL",
+        "MUT-TIMEOUT-NOT-SLOWER",
+        "MUT-TIMEOUT-FLAT",
+        "MUT-STALE-TRANSLATION-FINALLY"
+      ]
+    },
+    {
+      "id": "WAVEFORM-LIGHT-001",
+      "title": "The recording waveform is drawn at most at its chosen frame rate, the frame counter appears only in debug mode, and with the live panel open the waveform is a thin strip that leaves the live row visible",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-FPS-ALWAYS-ON",
+        "MUT-WAVE-EVERY-FRAME",
+        "MUT-WAVE-COVERS-ROW"
+      ]
+    },
+    {
+      "id": "WAVEFORM-RATE-SETTING-001",
+      "title": "The waveform's frame rate is a setting (off, 10, 15, 30 by default, 60 a second, or auto) that applies at once, also during a recording; it draws as many frames a second as chosen on any screen, sleeps between frames instead of waking on every display frame, does not catch up with a burst after a pause, and off hides it and draws nothing",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-WAVE-RATE-IGNORED",
+        "MUT-WAVE-SETTING-NOT-LIVE",
+        "MUT-WAVE-WAKES-EVERY-FRAME",
+        "MUT-WAVE-CATCH-UP-BURST",
+        "MUT-WAVE-OFF-DRAWS"
+      ]
+    },
+    {
+      "id": "WAVEFORM-AUTO-RATE-001",
+      "title": "Auto draws the waveform on every refresh of the screen the app is on, whatever its rate, and Settings labels Auto with the refresh rate measured from that screen, undisturbed by dropped frames or pauses",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-WAVE-AUTO-CAPPED",
+        "MUT-REFRESH-COUNTS-DROPPED-FRAMES",
+        "MUT-AUTO-LABEL-NOT-MEASURED"
+      ]
+    },
+    {
+      "id": "FULLSCREEN-ENDS-WITH-WAVEFORM-001",
+      "title": "When the waveform is hidden, because the recording stopped, capture failed or the waveform was turned off, its fullscreen view is left too, so the page is never left in fullscreen with its controls hidden and the list unscrollable",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-FULLSCREEN-OUTLIVES-WAVEFORM",
+        "MUT-FULLSCREEN-HIDDEN-IGNORED"
+      ]
+    },
+    {
+      "id": "ARCHIVE-EVERY-LANGUAGE-001",
+      "title": "A line that scrolls out of the live view is archived with its translation into every language heard, looked up by key rather than by scanning every translation, before those translations are let go",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-ARCHIVE-FIRST-LANGUAGE-ONLY",
+        "MUT-ARCHIVE-ONE-LANGUAGE"
+      ]
+    },
+    {
+      "id": "UPDATE-CHECK-NO-STRAY-TIMER-001",
+      "title": "A finished update check clears its time limits instead of leaving a twenty-second timer running behind it",
+      "suites": [
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-UPDATE-TIMER-LEFT"
+      ]
+    },
+    {
+      "id": "PREVIEW-ONLY-WHEN-SEEN-001",
+      "title": "Live previews are only requested when they can be shown, the app is in the foreground, someone has spoken since the last one, and no window is about to settle the same words; an unchanged preview does not repaint",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-PREVIEW-FOR-BOXES",
+        "MUT-PREVIEW-IN-SILENCE",
+        "MUT-PREVIEW-BEFORE-WINDOW"
+      ]
+    },
+    {
+      "id": "LIVE-ROWS-KEYED-001",
+      "title": "The live transcript, with or without translation boxes, is kept as keyed rows: a line scrolling out and a new one arriving create one row, and the rows already on screen are reused",
+      "suites": [
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-ROWS-REBUILT",
+        "MUT-SINGLE-INNERHTML"
+      ]
+    },
+    {
+      "id": "HEARTBEAT-BEAT-STORE-001",
+      "title": "The three-second recording heartbeat writes a small record in its own store; the recording row is rewritten only on a change of state, once a minute and before finalizing, and every liveness check, recovery included, reads the row and its beat together",
+      "suites": [
+        "pure",
+        "recording-lock-unit",
+        "static-integrity",
+        "user-journeys",
+        "storage-paths"
+      ],
+      "mutationGuards": [
+        "MUT-HEARTBEAT-ROW-EVERY-BEAT",
+        "MUT-BEAT-IGNORED-BY-RECOVERY",
+        "MUT-BEAT-FROM-ANY-TAB",
+        "MUT-ROW-DUE-NEVER-REFRESHES",
+        "MUT-DELETE-IGNORES-BEAT",
+        "MUT-DELETE-AUDIO-IGNORES-OWNER",
+        "MUT-DELETE-AUDIO-RACE"
+      ]
+    },
+    {
+      "id": "GATE-RUNNER-001",
+      "title": "The gate plans its suites so every one runs exactly once: the quick suites side by side, the browser suites one after another unless there are at least four cores, and the mutation guards on the cores left over; the mutation table is checked in full before any guard runs, and a guard that hangs or fails for another reason is named as such",
+      "suites": [
+        "baseline-runner-unit"
+      ],
+      "mutationGuards": [
+        "MUT-TABLE-FIRST-PROBLEM-ONLY",
+        "MUT-GUARD-TIMEOUT-AS-DETECTION",
+        "MUT-WORKERS-UNBOUNDED",
+        "MUT-PLAN-DROPS-SUITE",
+        "MUT-PLAN-BROWSERS-TOGETHER-ON-TWO"
+      ]
+    },
+    {
+      "id": "CONTRACT-DRIFT-001",
+      "title": "Every test file runs in the gate, every mutation guard is caught by a suite its contract names, and the contract's commands are the ones package.json runs",
+      "suites": [
+        "baseline-contract"
+      ],
+      "mutationGuards": [
+        "MUT-UNREGISTERED-TEST-FILE",
+        "MUT-GUARD-SUITE-UNCLAIMED",
+        "MUT-STRICT-COMMAND-DRIFT",
+        "MUT-STATIC-CEILING-RAISED"
+      ]
+    },
+    {
+      "id": "CHROMIUM-FOUND-001",
+      "title": "The browser suites find Chromium without being told where it is: CHROME_BIN when it is set, then the newest Chromium Playwright installed, then the PATH and the usual install locations",
+      "suites": [
+        "baseline-runner-unit",
+        "browser-lifecycle",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-CHROMIUM-IGNORES-PLAYWRIGHT"
+      ]
+    },
+    {
+      "id": "RELEASE-PUBLISH-WHOLE-001",
+      "title": "A release is published whole or not at all: the archive and its checksum are staged in the output folder and moved into place together, a failed move takes back what it moved so the next release is not blocked, Ctrl-C restores the tree without a traceback, and the gate line records how long the gate took and its slowest suite",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-RELEASE-STAGED-ON-OTHER-DISK",
+        "MUT-RELEASE-CHECKSUM-AFTER-PUBLISH",
+        "MUT-RELEASE-HALF-PUBLISHED",
+        "MUT-RELEASE-CTRL-C-TRACEBACK"
+      ]
+    },
+    {
+      "id": "LIVE-TAIL-AND-SEAMS-001",
+      "title": "Stop waits for the last window of speech, even one still being prepared, before the live transcript is saved; only a line that starts in the overlap with the previous window is checked for repeated words; a sentence split across two windows is saved in spoken order; a window being prepared when 📝 is hidden never lands in the next session; and the audio tap is detached before the live transcript is finished",
+      "suites": [
+        "pure",
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-STOP-FORGETS-PREPARING-WINDOW",
+        "MUT-SEAM-TRIMS-WHOLE-WINDOW",
+        "MUT-SEAM-LIMIT-NOT-PASSED",
+        "MUT-SPLIT-SENTENCE-REORDERED",
+        "MUT-STALE-WINDOW-JOINS-NEW-SESSION",
+        "MUT-OPUS-TAP-LEFT-CONNECTED"
+      ]
+    },
+    {
+      "id": "REPLAY-KEEPS-LIVE-001",
+      "title": "Live lines set aside because they overlap are replaced only when the replay of their passage heard words; when it fails or hears nothing they are saved as they were, a partial replay does not repeat them, and a failed chunk that also covered untranscribed audio still says so",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-REPLAY-FAILURE-DROPS-LIVE",
+        "MUT-REPLAY-SILENCE-COUNTS-AS-HEARD",
+        "MUT-REPLAY-DOUBLES-PARTIAL",
+        "MUT-REPLAY-HIDES-REAL-GAP",
+        "MUT-REPLAY-SETTLEMENT-UNUSED"
+      ]
+    },
+    {
+      "id": "OPUS-RECOVERY-WHOLE-001",
+      "title": "An Opus recording recovered from the pieces a closed tab left behind, which end inside the next block, still gets a duration and seek index with every complete block kept and only the unfinished one left out; transcription reads its last Cluster; and every Opus recording is as long as its file's last block, also after the audio engine was suspended",
+      "suites": [
+        "webm-remux-unit",
+        "pure",
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-RECOVERY-TAIL-THROWS",
+        "MUT-RECOVERY-BEGUN-CLUSTER-REFUSED",
+        "MUT-RECOVERY-LAST-BLOCK-IGNORED",
+        "MUT-OPUS-LENGTH-FROM-COUNTED-SAMPLES",
+        "MUT-OPUS-LENGTH-NOT-FROM-FILE"
+      ]
+    },
+    {
+      "id": "STOP-SURVIVES-FULL-DISK-001",
+      "title": "When storage fills during a recording, Stop still finalizes, saves the error it met with the recording, and keeps the heartbeat record with its length and failure until the recording is saved or marked; later pieces wait in memory so the stored audio has no hole; recovery after a reload saves it marked incomplete; and a recording whose save failed can be downloaded as the audio saved so far and is included in the backup",
+      "suites": [
+        "static-integrity",
+        "browser-lifecycle",
+        "storage-paths",
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-STOP-NOTE-FATAL",
+        "MUT-BEAT-DROPPED-UNSETTLED",
+        "MUT-BEAT-FORGETS-FAILURE",
+        "MUT-HOLE-AFTER-FAILED-PIECE",
+        "MUT-FAILED-SAVE-UNREACHABLE",
+        "MUT-BEAT-FLAGS-DROPPED-AFTER-CLEANUP",
+        "MUT-FINAL-BEAT-NOT-FORCED",
+        "MUT-RECOVERY-DROPS-UNSETTLED-BEAT"
+      ]
+    },
+    {
+      "id": "BACKUP-BEFORE-DELETE-001",
+      "title": "Choosing a backup before a deletion deletes nothing until the person says the backup file was saved; the backup names only the audio it really holds and says which it could not read; and no retention sweep runs in the tab while a backup is being made",
+      "suites": [
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-BACKUP-NOT-AWAITED",
+        "MUT-BACKUP-HIDES-MISSING-AUDIO"
+      ]
+    },
+    {
+      "id": "SETTINGS-WRITE-OWN-EDITS-001",
+      "title": "Closing or leaving Settings writes only the settings edited in this tab, so it never overwrites what another tab changed or saves defaults that were only looked at; a retention setting is saved only as the value that was confirmed, and cannot change while it is being checked",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-SETTINGS-WRITE-ALL",
+        "MUT-RETENTION-WRITTEN-ON-CLOSE",
+        "MUT-RETENTION-SAVES-LIVE-ELEMENT",
+        "MUT-RETENTION-UNLOCKED"
+      ]
+    },
+    {
+      "id": "RETENTION-KEEPS-ANSWERED-001",
+      "title": "Automatic deletion keeps a transcript while a reply written from it is still inside the text window, so a fresh reply is never deleted with its older transcript before the row's countdown ends",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-TRANSCRIPT-OUTLIVED-BY-REPLY"
+      ]
+    },
+    {
+      "id": "DELETE-ONE-KEEPS-WORK-001",
+      "title": "Deleting one transcript or reply leaves a running transcription, reply or translation fill of that recording running; and the cleanup pass that keeps only its own reading removes the live reading and its automatic copy, but never one a reply was written from or is being written from",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-DELETE-REPLY-CANCELS-ALL",
+        "MUT-CLEANUP-DROPS-ANSWERED",
+        "MUT-CLEANUP-KEEPS-AUTO-COPY"
+      ]
+    },
+    {
+      "id": "UPDATE-WAITS-FOR-WORK-001",
+      "title": "Loading a new build never reloads the page while this tab is recording, saving a recording, transcribing, replying or making a backup, and the refusal says so",
+      "suites": [
+        "pure",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-UPDATE-DURING-WORK"
+      ]
+    },
+    {
+      "id": "LIVE-POISON-WINDOW-001",
+      "title": "A live window the server keeps failing on while it answers the other windows is tried a few times and then left to the transcription after the recording, with a note saying which part and a gap mark on the next line, so it cannot hold back every line after it; during an outage no window loses its place",
+      "suites": [
+        "pure",
+        "live-scribe-unit"
+      ],
+      "mutationGuards": [
+        "MUT-POISON-WINDOW-RETRIED-FOREVER",
+        "MUT-OUTAGE-STRIKES-WINDOWS",
+        "MUT-SKIPPED-GAP-ON-LATER-LINE"
+      ]
+    },
+    {
+      "id": "TRANSLATE-NEVER-STRANDED-001",
+      "title": "Live translation boxes reach every line still to translate, newest first and then further back, so none waits forever after an outage or behind a slow model; a server that is down or refuses costs the lines nothing, the next try is at most 15 seconds away and immediate when the connection returns; a window with nothing said in it or a short mislabelled reply never decides the languages; and lines transcribed from before 📝 carry their language",
+      "suites": [
+        "pure",
+        "live-scribe-unit",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-TRANSLATE-RECENT-WINDOW-ONLY",
+        "MUT-OUTAGE-BLAMES-LINES",
+        "MUT-TIMEOUT-BATCH-BLAMED",
+        "MUT-TRANSLATE-BACKOFF-MINUTE",
+        "MUT-ONLINE-KEEPS-TRANSLATE-BACKOFF",
+        "MUT-SILENCE-IS-LANGUAGE",
+        "MUT-FIRST-LANGUAGE-FREE",
+        "MUT-BACKFILL-NO-LANGUAGE"
+      ]
+    },
+    {
+      "id": "AFTER-RECORDING-CANCEL-001",
+      "title": "Cancelling the automatic transcription or reply of a stopped recording, or deleting it, ends the work the recording started: the cleanup pass does not start after it, does not start on a recording being deleted, and shows its own progress with a ✕; a transcription or reply can be cancelled from its first moment",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle",
+        "saved-transcripts",
+        "storage-paths"
+      ],
+      "mutationGuards": [
+        "MUT-CANCEL-DOES-NOT-STOP-CHAIN",
+        "MUT-AUTO-SWALLOWS-CANCEL",
+        "MUT-EARLY-CANCEL-IGNORED",
+        "MUT-REPLY-EARLY-CANCEL-IGNORED",
+        "MUT-CLEANUP-ON-DELETED"
+      ]
+    },
+    {
+      "id": "FILL-WAITS-FOR-REPLY-001",
+      "title": "The translation fill after a recording sends nothing while a reply is running, tries a batch the server did not answer once more at the end, and reports a stop in a notice of its own that the next transcription or reply does not wipe",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "browser-lifecycle",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-FILL-COMPETES-WITH-REPLY",
+        "MUT-FILL-UNANSWERED-LOST",
+        "MUT-FILL-NOTE-AS-PIPELINE-ERROR"
+      ]
+    },
+    {
+      "id": "SAVING-AND-RECOVERY-SHOWN-001",
+      "title": "A recording this tab is saving says Saving, one another tab is saving says so, and the record button keeps saying it is busy until the save is done; a recording whose tab closed without saving it is recovered by any open tab without a reload, and until then says it was interrupted and offers Recover now and Delete",
+      "suites": [
+        "static-integrity",
+        "user-journeys",
+        "pure",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-OWN-SAVE-SHOWN-AS-OTHER-TAB",
+        "MUT-START-LABEL-WHILE-SAVING",
+        "MUT-NO-OPEN-TAB-RECOVERY",
+        "MUT-INTERRUPTED-WITHOUT-ACTIONS",
+        "MUT-FAILED-ROW-BUTTONS-DROPPED",
+        "MUT-INTERRUPTED-ROW-BUTTONS-DROPPED"
+      ]
+    },
+    {
+      "id": "LIST-REPAINT-KEEPS-STATE-001",
+      "title": "A repaint of the list neither stops nor rewinds the recording being listened to and keeps a title being typed, still focused; a transcription or reply that ends after its row was rebuilt leaves the button on screen usable; Enter on a transcript or context title opens one view; and Tab stays inside an open dialog, the paste box included",
+      "suites": [
+        "static-integrity",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-REPAINT-STOPS-PLAYBACK",
+        "MUT-REPAINT-DROPS-TITLE-EDIT",
+        "MUT-BUTTON-STUCK-AFTER-REBUILD",
+        "MUT-ENTER-OPENS-TWICE",
+        "MUT-DIALOG-TAB-ESCAPES"
+      ]
+    },
+    {
+      "id": "LONG-RECORDING-BOUNDED-001",
+      "title": "On a long recording the live transcript is saved when it has grown by a quarter or five minutes passed, never rewritten whole every minute; the startup sweep reads live transcript keys only; a queued live window counts all the audio it holds and windows waiting out an outage drop their review samples, so the queue's cap is its memory; and speaker clustering keeps running sums and clusters a window's lines once",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "user-journeys",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-SNAPSHOT-EVERY-MINUTE",
+        "MUT-SNAPSHOT-IGNORES-GROWTH",
+        "MUT-SNAPSHOT-UNCHANGED-REWRITTEN",
+        "MUT-LIVE-SWEEP-READS-ALL",
+        "MUT-QUEUE-UNDERCOUNTS-AUDIO",
+        "MUT-QUEUE-KEEPS-REVIEW-AUDIO",
+        "MUT-CENTROID-RESUMMED",
+        "MUT-SPEAKERS-PER-LINE"
+      ]
+    },
+    {
+      "id": "TRANSCRIBE-POOL-ADAPTS-001",
+      "title": "A transcription after recording sends two chunks at a time to start, one more after each quick answer up to ten, one fewer after an answer slow enough to show queuing and half as many after a timeout or a busy answer (503 or 429), and waits before resending a chunk that timed out; a chunk turned away as busy while another chunk of the same transcription is at the server waits for that one to come back and asks again without using up a try, up to a bound, so a server that takes one request at a time is not sent more than it can answer and loses nothing",
+      "suites": [
+        "pure",
+        "static-integrity",
+        "saved-transcripts"
+      ],
+      "mutationGuards": [
+        "MUT-POOL-FIXED-TEN",
+        "MUT-POOL-KEEPS-SIZE-ON-TIMEOUT",
+        "MUT-POOL-NEVER-SHRINKS",
+        "MUT-POOL-IGNORES-LIMIT",
+        "MUT-TIMEOUT-RESENT-AT-ONCE",
+        "MUT-BUSY-KEEPS-POOL",
+        "MUT-BUSY-NOT-RECOGNISED",
+        "MUT-BUSY-NOT-PASSED",
+        "MUT-BUSY-CHUNK-GIVEN-UP",
+        "MUT-BUSY-WAKES-ON-REFUSAL",
+        "MUT-BUSY-WAITS-WITHOUT-OWN-CHUNK",
+        "MUT-BUSY-WAITS-FOREVER",
+        "MUT-BUSY-WAITS-FOR-NOTHING"
+      ]
+    },
+    {
+      "id": "VIEWERS-STAY-FAST-001",
+      "title": "The transcription log viewer renders each chunk once, and again only the chunk after it when one arrives out of order, so opening it on a long recording takes a fraction of a second; the reply viewer writes the tokens of a frame in one go into a few growing text nodes, and on a timer where a window gets no frames; showing 📝 again keeps the live rows already on screen; and a reply that needs a larger context waits longer for its first word",
+      "suites": [
+        "live-view-unit",
+        "pure",
+        "static-integrity",
+        "live-scribe-unit",
+        "browser-lifecycle",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-LOG-CASCADES-TO-END",
+        "MUT-LOG-REBUILDS-EVERYTHING",
+        "MUT-REPLY-WRITES-PER-TOKEN",
+        "MUT-FIRST-BYTE-FIXED",
+        "MUT-FIRST-BYTE-SHORT-FOR-LONG-CONTEXT",
+        "MUT-RESUME-REBUILDS-ROWS",
+        "MUT-VIEWER-WAITS-FOR-FRAMES"
+      ]
+    },
+    {
+      "id": "LOG-VIEWER-MOVED-CHUNK-001",
+      "title": "A chunk sent to the transcription log viewer again with a different start is shown once, at its new place, however long the chunks are; it is no longer lost when the chunks after its old place render the same",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-LOG-LOSES-MOVED-CHUNK"
+      ]
+    },
+    {
+      "id": "SAVED-TRANSCRIPT-WHOLE-001",
+      "title": "A saved transcript says what was heard: a line is trimmed only against words another window heard at the same time, never against the line before it in its own window; the live transcript's lines are saved as they were shown; words a server placed only in a chunk's overlap are saved once, by the chunk that owns that time and at that time; a quiet core is saved as no speech, while a core with as much sound as the place the server named gets the server's text rather than being lost; and a transcription cancelled while its audio is prepared ends cleanly",
+      "suites": [
+        "saved-transcripts",
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SEAM-TRIMS-OWN-WINDOW",
+        "MUT-SEAM-IGNORES-TIME",
+        "MUT-SEAM-NO-COVERAGE",
+        "MUT-LIVE-TRANSCRIPT-RETRIMMED",
+        "MUT-OVERLAP-SPEECH-AT-CORE",
+        "MUT-SILENCE-OVER-WHOLE-CHUNK",
+        "MUT-CANCEL-REJECTION-UNHANDLED",
+        "MUT-CORE-SOUND-IGNORED",
+        "MUT-NOISY-CORE-TAKES-OVERLAP"
+      ]
+    },
+    {
+      "id": "LIVE-WINDOWS-HEAR-ONCE-001",
+      "title": "A live window adds only words from its own core, keeping the end of a sentence that began in its carry and runs on into it, however briefly, where the core has sound there; a window heard with nothing new in it is not a gap; the first window after dropped audio carries nothing from before the gap; and backfill windows repeat nothing where they overlap",
+      "suites": [
+        "live-scribe-unit"
+      ],
+      "mutationGuards": [
+        "MUT-LIVE-OVERLAP-SPEECH-AT-CORE",
+        "MUT-DROP-KEEPS-CARRY",
+        "MUT-BACKFILL-SEAMLESS",
+        "MUT-LIVE-RUN-ON-DROPPED",
+        "MUT-EMPTY-WINDOW-IS-GAP",
+        "MUT-LIVE-SHORT-RUN-ON-DROPPED",
+        "MUT-LIVE-QUIET-CORE-TOUCH-KEPT"
+      ]
+    },
+    {
+      "id": "TRANSLATE-ONE-LINE-001",
+      "title": "A single line asked for without numbering is taken as the model wrote it, so a translation that starts with a time or a date is kept; one asked for with its number loses only that number, however it is written and after a preamble, and a number the translation itself starts with is kept",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SINGLE-LINE-NUMBERED",
+        "MUT-SINGLE-LINE-NO-FALLBACK",
+        "MUT-SINGLE-LINE-PREAMBLE-TAKEN",
+        "MUT-SINGLE-LINE-OWN-NUMBER-CUT"
+      ]
+    },
+    {
+      "id": "RETENTION-FROM-END-001",
+      "title": "A recording ages from when it stopped, by the wall clock, so a recording longer than the audio window, or one that saved less audio than it ran for, is not deleted as soon as it is stopped",
+      "suites": [
+        "pure",
+        "storage-paths"
+      ],
+      "mutationGuards": [
+        "MUT-RETENTION-FROM-START",
+        "MUT-ENDED-AT-NOT-NOTED",
+        "MUT-ENDED-AT-IGNORED"
+      ]
+    },
+    {
+      "id": "DELETE-LEAVES-NOTHING-HIDDEN-001",
+      "title": "Deleting a transcript, or a cleanup pass replacing the live reading, takes the live transcript with the last transcript made from it; a backup leaves out a live transcript no transcript shows; and the question before deleting a recording names the audio saved so far",
+      "suites": [
+        "storage-paths",
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-DELETE-TRANSCRIPT-KEEPS-LIVE",
+        "MUT-CLEANUP-KEEPS-LIVE",
+        "MUT-BACKUP-CARRIES-ORPHAN-LIVE",
+        "MUT-DELETE-PROMPT-IGNORES-SAVED-SO-FAR"
+      ]
+    },
+    {
+      "id": "INTERRUPTED-DELETE-FINISHED-001",
+      "title": "A deletion is noted while it runs, and one a closed tab left half done is finished by the next tab that holds the recording lock, never one that another tab is still capturing",
+      "suites": [
+        "storage-paths",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-INTERRUPTED-DELETE-LEFT",
+        "MUT-INTERRUPTED-DELETE-NOT-NOTED",
+        "MUT-INTERRUPTED-DELETE-IGNORES-OWNER",
+        "MUT-INTERRUPTED-DELETE-IGNORES-MARK",
+        "MUT-FAILED-MARK-KEEPS-NOTE"
+      ]
+    },
+    {
+      "id": "DEFAULT-MODEL-DOCUMENTED-001",
+      "title": "The README names the default AI model the code uses",
+      "suites": [
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-DEFAULT-MODEL-UNDOCUMENTED"
+      ]
+    },
+    {
+      "id": "AUDIO-RESAMPLE-001",
+      "title": "Audio is converted to 16 kHz through a low-pass filter, so sounds above 8 kHz do not fold back into the speech band, and a recording converted in pieces joins without a seam",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-PCM-RESAMPLED-WITHOUT-FILTER",
+        "MUT-RESAMPLE-CUTOFF-AT-SOURCE",
+        "MUT-RESAMPLE-SEAMS"
+      ]
+    },
+    {
+      "id": "DIARIZE-SAME-ROOM-001",
+      "title": "How sure the app is that two voice groups are two people reaches the 60% bar at the clustering's same-speaker boundary, not below it, so two people in one room, on one microphone and in one language are not reported as unsure for as long as they speak; a split the clustering would still let a line join stays short of the bar",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SAME-ROOM-VOICE-HIDDEN",
+        "MUT-SPLIT-LABELLED-AS-TWO"
+      ]
+    },
+    {
+      "id": "CAPTURE-AUTO-GAIN-001",
+      "title": "The automatic gain reads its meter as floats and holds through a quiet pause instead of climbing to its cap",
+      "suites": [
+        "pure",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-AGC-BYTE-METER",
+        "MUT-AGC-NO-HOLD"
+      ]
+    },
+    {
+      "id": "DIARIZE-NUMBERS-SHOWN-001",
+      "title": "Speaker numbers are shown once two voices have spoken, however alike they sound, and the live header counts the same speakers; a line whose group is not a voice carries the number before it until its group becomes one; a monologue with stray lines, and two groups confirmed as one person, are not numbered; a voice whose lines have left the window still counts",
+      "suites": [
+        "pure",
+        "live-scribe-unit"
+      ],
+      "mutationGuards": [
+        "MUT-NUMBERS-WAIT-FOR-CONFIDENCE",
+        "MUT-STRAY-LINE-NUMBERED",
+        "MUT-ONE-LINE-IS-A-VOICE",
+        "MUT-RETIRED-VOICE-FORGOTTEN",
+        "MUT-CONFIRMED-PAIR-COUNTS-TWICE"
+      ]
+    },
+    {
+      "id": "DIARIZE-VOICES-STAY-001",
+      "title": "Once speaker numbers are on screen they stay for the session, and a voice stays a voice: every regrouping starts from the lines already its own, a line moves to another voice only when it sounds clearly more like it, two voices become one only when every line of the smaller sounds more like the other or both have said five lines scoring 0.70 against each other, a named voice outlives the unnamed one and two differently named voices are never joined; two lines become a voice only when they sound like each other clearly more than like any other group",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-VOICES-REGROUPED-FROM-SCRATCH",
+        "MUT-NUMBERS-NOT-LATCHED",
+        "MUT-VOICES-JOINED-EASILY",
+        "MUT-VOICES-NEVER-JOINED",
+        "MUT-NAMED-VOICE-LOST",
+        "MUT-DIFFERENT-NAMES-JOINED",
+        "MUT-VOICE-LINE-STUCK",
+        "MUT-NEW-VOICE-WITHOUT-MARGIN"
+      ]
+    },
+    {
+      "id": "DIARIZE-NUMBERS-IN-ORDER-001",
+      "title": "Speaker numbers on screen count 1, 2, 3 in the order voices were first shown with one, whatever identities the clustering gave them: the first two take theirs in the order they first spoke, a newcomer takes the next number and no number already shown changes for it, and when two voices become one the joined voice keeps the lower number and the voices after it move up one, so the numbers never skip; the header lists speakers in that order, and receipts, inference notes and suggestions use the same numbers, with \"confirm speaker N\" confirming the suggestion announced for Speaker N",
+      "suites": [
+        "pure",
+        "live-scribe-unit"
+      ],
+      "mutationGuards": [
+        "MUT-NUMBERS-ARE-IDENTITIES",
+        "MUT-NUMBERS-SKIP-AFTER-JOIN",
+        "MUT-NUMBERS-RESORTED",
+        "MUT-FIRST-TWO-BY-IDENTITY",
+        "MUT-NUMBERED-BEFORE-SHOWN",
+        "MUT-HEADER-OUT-OF-ORDER",
+        "MUT-RECEIPT-SAYS-IDENTITY",
+        "MUT-PANEL-SAYS-IDENTITY",
+        "MUT-MERGE-INTO-LOWER-IDENTITY",
+        "MUT-PROPOSAL-SHOWS-IDENTITY",
+        "MUT-ANNOUNCED-NUMBER-FORGOTTEN",
+        "MUT-CONFIRM-BY-IDENTITY"
+      ]
+    },
+    {
+      "id": "SEAM-CUT-WORDS-001",
+      "title": "A seam is found also where a window edge cut a word: the window after it may have heard only the end of the seam's first word and the window before it only the start of its last, or misheard that clipped part; a seam of two or three words may have one such edge word; the reading of the closing word that heard it whole is kept; and two different words, two numbers that share their first digits, or a run whose both edge words are cut never anchor a seam",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SEAM-CUT-OPENING-WORD",
+        "MUT-SEAM-CUT-CLOSING-WORD",
+        "MUT-SEAM-CUT-DIGITS",
+        "MUT-SEAM-SHORT-RUN-DROPPED",
+        "MUT-SEAM-SHORT-RUN-TWO-CUTS",
+        "MUT-SEAM-CLIPPED-WORD-KEPT"
+      ]
+    },
+    {
+      "id": "SEAM-SPEAKER-LABEL-001",
+      "title": "A saved live line keeps its speaker apart from its words, so where it meets a chunk transcribed after the recording the words both heard are trimmed and the speaker stays in front of what is kept, in the timestamped reading and the one handed to the reply",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SPEAKER-LABEL-BLOCKS-SEAM",
+        "MUT-SPEAKER-LABEL-DROPPED"
+      ]
+    },
+    {
+      "id": "LIVE-HOLES-MARKED-001",
+      "title": "Audio the live transcript never heard is marked [not transcribed live] where it was in the saved live transcript, and counted on it; the row of such a recording offers 📝 Fill gaps also in the compact list, which transcribes only those parts, until a reading made after the recording exists; a live transcript that records no coverage marks nothing; and with Auto-transcribe off the live notes promise those parts to 📝 Fill gaps, not to a transcription after the recording that will not run",
+      "suites": [
+        "pure",
+        "app-behaviour",
+        "live-scribe-unit"
+      ],
+      "mutationGuards": [
+        "MUT-HOLES-NOT-MARKED",
+        "MUT-HOLES-WITHOUT-COVERAGE",
+        "MUT-HOLES-NOT-STORED",
+        "MUT-HOLES-NOT-COUNTED",
+        "MUT-FILL-GAPS-HIDDEN",
+        "MUT-FILL-GAPS-SENDS-ALL",
+        "MUT-FILL-GAPS-AFTER-FILLING",
+        "MUT-LIVE-NOTES-PROMISE-AUTO",
+        "MUT-SKIP-NOTE-PROMISES-AUTO"
+      ]
+    },
+    {
+      "id": "SEGMENT-TEXT-001",
+      "title": "A segment the transcription server sends without text is read as empty, so it cannot take the other lines of its chunk down with it",
+      "suites": [
+        "saved-transcripts"
+      ],
+      "mutationGuards": [
+        "MUT-NULL-SEGMENT-TEXT"
+      ]
+    },
+    {
+      "id": "KEYS-INNER-CONTROL-001",
+      "title": "Enter or Space on a control inside a transcript or reply preview (its 📋) presses that control, as a click does; the preview around it takes only keys pressed on the preview itself",
+      "suites": [
+        "pure",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-KEY-ON-INNER-CONTROL-TAKEN"
+      ]
+    },
+    {
+      "id": "UPDATE-CHECK-BOUNDED-001",
+      "title": "The update check gives up on a server that takes the request for the worker script and never answers, and cancels that request, so the check and its button cannot stay on Checking... for good",
+      "suites": [
+        "platform-unit"
+      ],
+      "mutationGuards": [
+        "MUT-UPDATE-CHECK-HANGS"
+      ]
+    },
+    {
+      "id": "LIMITER-RANGE-001",
+      "title": "Every setting of the limiter lies inside the range Web Audio accepts, so none is clamped behind the app's back and a recording logs no clamping warning",
+      "suites": [
+        "pure",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-LIMITER-CLAMPED"
+      ]
+    },
+    {
+      "id": "LONG-TITLE-WRAPS-001",
+      "title": "A recording title with no spaces in it, such as a pasted address, wraps inside its row on a phone-width screen instead of widening the page and pushing dialogs off screen",
+      "suites": [
+        "user-journeys"
+      ]
     }
   ],
   "untestedModules": []

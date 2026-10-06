@@ -1,8 +1,3 @@
-/* Deterministic, dependency-free multi-tab integration tests.
- * Two worker realms load the actual recording-lock.js module with separate
- * sessionStorage identities and shared localStorage. Both the Web Locks path
- * and the verified-storage fallback are exercised.
- */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

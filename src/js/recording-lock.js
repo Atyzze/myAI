@@ -1,16 +1,7 @@
-/* ========================================================================== 
-   recording-lock.js - Cross-tab recording/finalization ownership.
-
-   Web Locks provides atomic exclusion where available. A verified localStorage
-   lease is the fallback and also lets every tab render the current global LIVE
-   state. The lease carries both a tab owner and a per-recording session id, so
-   stale chunks can never be mistaken for the active write stream.
-   ========================================================================== */
 import { CONFIG } from './config.js';
 
 const LOCK_NAME    = 'myai-active-recording';
 export const RECORDING_LEASE_KEY = 'myai-active-recording-lease-v2';
-const LEGACY_LEASE_KEY = 'myai-active-recording-lease-v1';
 const TAB_KEY      = 'myai-tab-owner-v1';
 const CHANNEL_NAME = 'myai-recording-lock-v2';
 
@@ -58,16 +49,17 @@ if (typeof window !== 'undefined') {
         }
     } catch (_) {}
     window.addEventListener('storage', event => {
-        if (event.key === RECORDING_LEASE_KEY || event.key === LEGACY_LEASE_KEY) notifyLeaseListeners();
+        if (event.key === RECORDING_LEASE_KEY) notifyLeaseListeners();
     });
 }
 
 export function getRecordingOwnerId() { return tabId; }
 
+export function holdsRecordingLock() { return held; }
+
 export function readRecordingLease() {
     try {
-        const raw = localStorage.getItem(RECORDING_LEASE_KEY)
-            || localStorage.getItem(LEGACY_LEASE_KEY);
+        const raw = localStorage.getItem(RECORDING_LEASE_KEY);
         return raw ? JSON.parse(raw) : null;
     } catch (_) { return null; }
 }
@@ -85,15 +77,23 @@ export function isLeaseOwnedByThisTab(lease = getActiveRecordingLease()) {
     return !!lease && lease.ownerId === tabId;
 }
 
-export function isRecordOwnedByLiveTab(rec, now = Date.now()) {
-    if (!rec || !rec.ownerId || !isFreshHeartbeat(rec.heartbeatAt, now)) return false;
+export function beatHeartbeatAt(rec, beat) {
+    if (!rec || !beat || beat.recId == null || Number(beat.recId) !== Number(rec.id)) return 0;
+    if (!rec.ownerId || beat.ownerId !== rec.ownerId) return 0;
+    if (rec.sessionId && beat.sessionId && beat.sessionId !== rec.sessionId) return 0;
+    return Number(beat.heartbeatAt) || 0;
+}
+
+export function recordHeartbeatAt(rec, beat = null) {
+    return Math.max(Number(rec && rec.heartbeatAt) || 0, beatHeartbeatAt(rec, beat));
+}
+
+export function isRecordOwnedByLiveTab(rec, now = Date.now(), beat = null) {
+    if (!rec || !rec.ownerId || !isFreshHeartbeat(recordHeartbeatAt(rec, beat), now)) return false;
     const lease = getActiveRecordingLease(now);
     if (!lease
         || lease.ownerId !== rec.ownerId
         || Number(lease.recId) !== Number(rec.id)) return false;
-    // Legacy rows/leases have no sessionId; retain compatibility. New rows must
-    // match exactly, which prevents fragments from a different capture session
-    // under the same legacy recording id from being treated as one stream.
     return !rec.sessionId || !lease.sessionId || lease.sessionId === rec.sessionId;
 }
 
@@ -115,7 +115,6 @@ export function publishRecordingLease(recId, heartbeatAt = Date.now(), sessionId
     };
     try {
         localStorage.setItem(RECORDING_LEASE_KEY, JSON.stringify(lease));
-        localStorage.removeItem(LEGACY_LEASE_KEY);
     } catch (_) {}
     broadcastLeaseChange();
     return lease;
@@ -126,7 +125,6 @@ function clearOwnLease() {
     if (lease && lease.ownerId === tabId) {
         try {
             localStorage.removeItem(RECORDING_LEASE_KEY);
-            localStorage.removeItem(LEGACY_LEASE_KEY);
         } catch (_) {}
         broadcastLeaseChange();
     }
@@ -156,9 +154,6 @@ async function acquireUnderlyingLock() {
         return acquired;
     }
 
-    // Best-effort fallback. Write a unique token, briefly yield, then verify that
-    // this tab still owns the lease. A competing write causes one contender to
-    // fail verification; a fresh existing lease prevents a late contender.
     const existing = getActiveRecordingLease();
     if (existing && existing.ownerId !== tabId) return false;
 

@@ -1,13 +1,15 @@
-/* Seekable WebM remux tests. */
 import { emitTestResult } from '../helpers/test-result.mjs';
 import {
-    remuxWebmSeekableBytes,
     inspectWebmDurationBytes,
     makeWebmSeekable,
     prepareWebmChunkSource,
     makeWebmDecodeChunk,
+    estimateTruncatedDurationSec,
+    webmAudioEndMs,
     WEBM_SEEKABLE_VERSION
 } from '../../src/js/webm-duration.js';
+import { concat, element, uintPayload, float64, unknownSegmentSize, clusterPayload, cluster, syntheticWebm }
+    from '../helpers/synthetic-webm.mjs';
 
 let assertions = 0;
 function ok(value, message) {
@@ -23,60 +25,9 @@ function throws(fn, message) {
     ok(didThrow, message);
 }
 
-const concat = (...parts) => {
-    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-    let off = 0;
-    for (const part of parts) { out.set(part, off); off += part.length; }
-    return out;
-};
-const size = n => {
-    if (n <= 126) return new Uint8Array([0x80 | n]);
-    if (n <= 16382) return new Uint8Array([0x40 | (n >> 8), n & 0xff]);
-    throw new Error('test size too large');
-};
-const uintPayload = (n, bytes = 1) => {
-    const out = new Uint8Array(bytes);
-    for (let i = bytes - 1; i >= 0; i--) { out[i] = n & 0xff; n = Math.floor(n / 256); }
-    return out;
-};
-const element = (id, payload) => concat(new Uint8Array(id), size(payload.length), payload);
-const float64 = n => {
-    const out = new Uint8Array(8);
-    new DataView(out.buffer).setFloat64(0, n, false);
-    return out;
-};
-const unknownSegmentSize = new Uint8Array([0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]);
-
-function cluster(time, marker) {
-    const timestampBytes = time > 0xFFFFFF ? 4 : time > 0xFFFF ? 3 : time > 0xFF ? 2 : 1;
-    const timestamp = element([0xE7], uintPayload(time, timestampBytes));
-    const simpleBlock = element([0xA3], new Uint8Array([0x81, 0x00, 0x00, 0x80, marker, marker + 1, marker + 2]));
-    return element([0x1F, 0x43, 0xB6, 0x75], concat(timestamp, simpleBlock));
-}
-
-function syntheticWebm({ durationTicks = null, scale = 1_000_000, includeClusters = true, clusterTimes = [0, 4000, 8000] } = {}) {
-    const ebml = element([0x1A, 0x45, 0xDF, 0xA3], new Uint8Array(0));
-    const staleSeek = element([0x11, 0x4D, 0x9B, 0x74], element([0x4D, 0xBB], concat(
-        element([0x53, 0xAB], new Uint8Array([0x15, 0x49, 0xA9, 0x66])),
-        element([0x53, 0xAC], new Uint8Array([0x00]))
-    )));
-    const voidEl = element([0xEC], new Uint8Array(32));
-    const infoParts = [element([0x2A, 0xD7, 0xB1], uintPayload(scale, 4))];
-    if (durationTicks != null) infoParts.push(element([0x44, 0x89], float64(durationTicks)));
-    infoParts.push(element([0x4D, 0x80], new TextEncoder().encode('myAI')));
-    const info = element([0x15, 0x49, 0xA9, 0x66], concat(...infoParts));
-    const trackEntry = element([0xAE], concat(
-        element([0xD7], new Uint8Array([1])),
-        element([0x83], new Uint8Array([2]))
-    ));
-    const tracks = element([0x16, 0x54, 0xAE, 0x6B], trackEntry);
-    const clusters = includeClusters ? clusterTimes.map((time, i) => cluster(time, 0x31 + i * 0x10)) : [];
-    const segment = concat(
-        new Uint8Array([0x18, 0x53, 0x80, 0x67]),
-        unknownSegmentSize,
-        staleSeek, voidEl, info, tracks, ...clusters
-    );
-    return { bytes: concat(ebml, segment), clusters };
+async function remux(bytes, durationMs) {
+    const fixed = await makeWebmSeekable(new Blob([bytes], { type: 'audio/webm;codecs=opus' }), durationMs);
+    return new Uint8Array(await fixed.arrayBuffer());
 }
 
 function contains(haystack, needle) {
@@ -87,7 +38,7 @@ function contains(haystack, needle) {
     return false;
 }
 
-ok(WEBM_SEEKABLE_VERSION === 2, 'container-remux schema version is explicit');
+ok(WEBM_SEEKABLE_VERSION === 3, 'container-remux schema version is explicit');
 
 {
     const source = syntheticWebm();
@@ -95,29 +46,36 @@ ok(WEBM_SEEKABLE_VERSION === 2, 'container-remux schema version is explicit');
     ok(!before.present && !before.finiteSegment && before.cueCount === 0,
         'MediaRecorder-style source is unknown-length and unindexed');
 
-    const remuxed = remuxWebmSeekableBytes(source.bytes, 512_000);
-    const meta = inspectWebmDurationBytes(remuxed.bytes);
+    const remuxed = await remux(source.bytes, 512_000);
+    const meta = inspectWebmDurationBytes(remuxed);
     ok(meta.present, 'missing Duration is inserted');
     near(meta.durationMs, 512_000, 0.001, 'inserted duration matches 8m32s');
     ok(meta.finiteSegment, 'unknown-size live Segment is rewritten with a finite size');
     ok(meta.cueCount === source.clusters.length, 'one CuePoint is written for every Cluster');
-    ok(remuxed.cueCount === source.clusters.length, 'remux result reports its cue count');
     for (const rawCluster of source.clusters) {
-        ok(contains(remuxed.bytes, rawCluster), 'compressed Cluster bytes are retained unchanged');
+        ok(contains(remuxed, rawCluster), 'compressed Cluster bytes are retained unchanged');
     }
 
-    const second = remuxWebmSeekableBytes(remuxed.bytes, 512_000);
-    ok(second.bytes.length === remuxed.bytes.length && second.bytes.every((b, i) => b === remuxed.bytes[i]),
+    const second = await remux(remuxed, 512_000);
+    ok(second.length === remuxed.length && second.every((b, i) => b === remuxed[i]),
         'remux is deterministic and idempotent');
 }
 
 {
     const source = syntheticWebm({ durationTicks: 1, scale: 2_000_000 });
-    const remuxed = remuxWebmSeekableBytes(source.bytes, 10_000);
-    const meta = inspectWebmDurationBytes(remuxed.bytes);
+    const remuxed = await remux(source.bytes, 10_000);
+    const meta = inspectWebmDurationBytes(remuxed);
     near(meta.durationTicks, 5_000, 0.001, 'duration respects a non-default TimestampScale');
     near(meta.durationMs, 10_000, 0.001, 'existing Duration is replaced');
     ok(meta.cueCount === 3, 'existing stale metadata is replaced by a complete cue index');
+}
+
+{
+    const source = syntheticWebm({ unknownClusterSize: true });
+    const fixed = await remux(source.bytes, 12_000);
+    ok(inspectWebmDurationBytes(fixed).cueCount === source.clusters.length, 'unknown-size Clusters are indexed');
+    ok(!contains(fixed, concat(new Uint8Array([0x1F, 0x43, 0xB6, 0x75]), unknownSegmentSize)), 'every Cluster is written with a known size');
+    for (const payload of source.payloads) ok(contains(fixed, payload), 'Cluster payloads are retained unchanged');
 }
 
 {
@@ -131,8 +89,6 @@ ok(WEBM_SEEKABLE_VERSION === 2, 'container-remux schema version is explicit');
 }
 
 {
-    // A two-hour logical source proves that chunk preparation is based on
-    // container coordinates, not a full-file duration cutoff or whole decode.
     const source = syntheticWebm({ clusterTimes: [0, 3_600_000, 5_400_000, 7_199_000] });
     const blob = new Blob([source.bytes], { type: 'audio/webm;codecs=opus' });
     const prepared = await prepareWebmChunkSource(blob, 7_200_000);
@@ -149,6 +105,111 @@ ok(WEBM_SEEKABLE_VERSION === 2, 'container-remux schema version is explicit');
 }
 
 {
+    const source = syntheticWebm({ clusterTimes: [0, 60_000, 120_000, 180_000] });
+    const cut = source.bytes.slice(0, source.bytes.length - 6);
+    const blob = new Blob([cut], { type: 'audio/webm;codecs=opus' });
+
+    let strictThrew = false;
+    try { await prepareWebmChunkSource(blob, 240_000); } catch (_) { strictThrew = true; }
+    ok(strictThrew, 'a truncated container is refused by default');
+
+    let remuxThrew = false;
+    try { await makeWebmSeekable(blob, 240_000); } catch (_) { remuxThrew = true; }
+    ok(remuxThrew, 'the destructive remux path never rewrites a master from a prefix');
+
+    const tolerant = await prepareWebmChunkSource(blob, 240_000, { tolerateTruncation: true });
+    ok(tolerant && tolerant.truncatedAt && Number.isFinite(tolerant.truncatedAt.offset),
+       'read-only indexing recovers the readable prefix and reports where it stopped');
+    ok(tolerant.clusters.length >= 2, 'the recovered prefix keeps its indexed Clusters');
+    ok(tolerant.durationSec <= 240,
+       'a truncated index never claims the declared recording length');
+    const last = tolerant.clusters[tolerant.clusters.length - 1];
+    ok(last.endSec > last.startSec,
+       'every fully indexed Cluster, including the last one, spans a decodable window');
+    ok(tolerant.durationSec >= last.endSec,
+       'a truncated index reaches the end of the last Cluster it fully indexed');
+    const tail = await makeWebmDecodeChunk(tolerant, last.startSec, tolerant.durationSec);
+    ok(tail.clusterCount >= 1,
+       'the tail of an interrupted recording stays reachable for review');
+    const window = await makeWebmDecodeChunk(tolerant, 0, tolerant.durationSec);
+    ok(window.includedEndSec <= tolerant.durationSec,
+       'decode windows stay inside the bytes that were actually indexed');
+}
+
+{
+    const source = syntheticWebm({ clusterTimes: [0] });
+    const cut = source.bytes.slice(0, source.bytes.length - 6);
+    const blob = new Blob([cut], { type: 'audio/webm;codecs=opus' });
+    let threw = false;
+    try { await prepareWebmChunkSource(blob, 60_000, { tolerateTruncation: true }); }
+    catch (_) { threw = true; }
+    ok(threw, 'tolerance still refuses a file with no usable amount of audio indexed');
+}
+
+function chromeStyleWebm({ clusterTimes = [0, 4000, 8000], blocks = 200, step = 20, scale = 1_000_000 } = {}) {
+    const ebml = element([0x1A, 0x45, 0xDF, 0xA3], new Uint8Array(0));
+    const info = element([0x15, 0x49, 0xA9, 0x66], element([0x2A, 0xD7, 0xB1], uintPayload(scale, 4)));
+    const tracks = element([0x16, 0x54, 0xAE, 0x6B], element([0xAE], concat(
+        element([0xD7], new Uint8Array([1])), element([0x83], new Uint8Array([2])))));
+    const clusters = clusterTimes.map((time, c) => {
+        const timestampBytes = time > 0xFFFF ? 3 : time > 0xFF ? 2 : 1;
+        const parts = [element([0xE7], uintPayload(time, timestampBytes))];
+        for (let b = 0; b < blocks; b++) {
+            const relative = b * step;
+            parts.push(element([0xA3], new Uint8Array([0x81, relative >> 8, relative & 0xff, 0x80, c, b & 0xff, 0x55])));
+        }
+        return concat(new Uint8Array([0x1F, 0x43, 0xB6, 0x75]), unknownSegmentSize, ...parts);
+    });
+    const segment = concat(new Uint8Array([0x18, 0x53, 0x80, 0x67]), unknownSegmentSize, info, tracks, ...clusters);
+    return { bytes: concat(ebml, segment), clusters };
+}
+
+async function remuxOrNull(bytes, durationMs = 12_000) {
+    try {
+        const fixed = await makeWebmSeekable(new Blob([bytes], { type: 'audio/webm;codecs=opus' }), durationMs);
+        return new Uint8Array(await fixed.arrayBuffer());
+    } catch (_) {
+        return null;
+    }
+}
+
+{
+    const source = chromeStyleWebm();
+    const lastBlock = source.clusters[2].slice(-9);
+    const recovered = concat(source.bytes, new Uint8Array([0xA3]));
+    const blob = new Blob([recovered], { type: 'audio/webm;codecs=opus' });
+    const fixed = await remuxOrNull(recovered);
+    const meta = fixed ? inspectWebmDurationBytes(fixed) : {};
+    ok(meta.finiteSegment && meta.cueCount === 3,
+       'recovery: pieces saved before a tab was closed, which end one byte into the next block, still become a seekable file with every Cluster indexed');
+    ok(fixed && contains(fixed, lastBlock), 'recovery: the last complete block of the last Cluster is kept');
+    const tolerant = await prepareWebmChunkSource(blob, 12_000, { tolerateTruncation: true });
+    ok(tolerant.clusters.length === 3 && !tolerant.truncatedAt,
+       'recovery: transcription reads the last Cluster too, instead of dropping its four seconds');
+    near(await webmAudioEndMs(blob), 12_000, 0.001,
+         'recovery: the length is read from the last block in the file, not from the last heartbeat');
+
+    const cutFixed = await remuxOrNull(concat(source.bytes, new Uint8Array([0x1F])));
+    ok(cutFixed && inspectWebmDurationBytes(cutFixed).cueCount === 3,
+       'recovery: a piece that ends with the first byte of a new Cluster is repaired the same way');
+
+    const cutBlockFixed = await remuxOrNull(source.bytes.slice(0, source.bytes.length - 4));
+    const withoutLastBlock = await remuxOrNull(source.bytes.slice(0, source.bytes.length - 9));
+    ok(cutBlockFixed && withoutLastBlock && cutBlockFixed.length === withoutLastBlock.length && cutBlockFixed.every((byte, i) => byte === withoutLastBlock[i])
+       && contains(cutBlockFixed, source.clusters[2].slice(-18, -9)),
+       'recovery: a block cut in the middle is left out, and the complete blocks before it are kept');
+
+    const begunCluster = concat(source.bytes, new Uint8Array([0x1F, 0x43, 0xB6, 0x75]), unknownSegmentSize, new Uint8Array([0xE7]));
+    const begunFixed = await remuxOrNull(begunCluster);
+    ok(begunFixed && inspectWebmDurationBytes(begunFixed).cueCount === 3,
+       'recovery: a Cluster that was only just begun when the tab closed is left out, and everything before it is kept');
+
+    const scaled = chromeStyleWebm({ clusterTimes: [0, 2000], blocks: 100, step: 10, scale: 2_000_000 });
+    near(await webmAudioEndMs(new Blob([scaled.bytes], { type: 'audio/webm;codecs=opus' })), 6_000, 0.001,
+         'recovery: the length respects a non-default TimestampScale');
+}
+
+{
     const ogg = new Blob([new Uint8Array([0x4f, 0x67, 0x67, 0x53])], { type: 'audio/ogg;codecs=opus' });
     ok(await makeWebmSeekable(ogg, 5000) === ogg, 'non-WebM Opus is left untouched');
 }
@@ -156,6 +217,19 @@ ok(WEBM_SEEKABLE_VERSION === 2, 'container-remux schema version is explicit');
 {
     const source = syntheticWebm({ includeClusters: false });
     throws(() => remuxWebmSeekableBytes(source.bytes, 5000), 'files without audio Clusters are rejected');
+}
+
+{
+    near(estimateTruncatedDurationSec([0, 60, 120]), 180, 1e-9,
+         'a truncated tail is estimated from the observed Cluster cadence');
+    ok(estimateTruncatedDurationSec([0, 60, 120]) > 120,
+       'a truncated duration always reaches past the final Cluster start');
+    near(estimateTruncatedDurationSec([0, 10, 20, 200]), 210, 1e-9,
+         'one abnormally long gap does not drag the estimate with it');
+    ok(estimateTruncatedDurationSec([5]) > 5,
+       'a single indexed Cluster still spans a decodable window');
+    ok(estimateTruncatedDurationSec([]) === 0,
+       'no indexed Clusters means no claimable duration');
 }
 
 console.log(`✓ all ${assertions} WebM seekability assertions passed`);

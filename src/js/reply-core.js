@@ -1,13 +1,104 @@
-/* ==========================================================================
- * reply-core.js - Pure context sizing and prompt-budget helpers.
- * ========================================================================== */
+const WIDE_SCRIPT = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\ua960-\ua97f\uac00-\ud7ff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60]/;
 
-export function estimateTokens(text, charsPerToken = 3) {
-    return Math.ceil(String(text ?? '').length / charsPerToken);
+export const LATIN_CHARS_PER_TOKEN = 3.3;
+
+const CODE_RUN_MIN = 16;
+
+const SPACE_CLASS = Object.freeze({ space: true });
+const NEWLINE_CLASS = Object.freeze({ newline: true });
+const LATIN_CLASS = Object.freeze({ letter: true, latin: true });
+const DIGIT_CLASS = Object.freeze({ digit: true, weight: 1 });
+const SYMBOL_CLASS = Object.freeze({ weight: 1 });
+const WIDE_CLASS = Object.freeze({ letter: true, weight: 1 });
+const ASTRAL_CLASS = Object.freeze({ weight: 2 });
+
+const SCRIPT_WEIGHTS = [
+    [/\p{Script=Cyrillic}/u, 0.5],
+    [/[\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Syriac}\p{Script=Thaana}]/u, 0.6]
+].map(([pattern, weight]) => [pattern, Object.freeze({ letter: true, weight })]);
+const OTHER_LETTER_CLASS = Object.freeze({ letter: true, weight: 1 });
+
+const nonAsciiClasses = new Map();
+
+function classifyNonAscii(ch, code) {
+    if (/\s/u.test(ch)) return ch === '\u2028' || ch === '\u2029' ? NEWLINE_CLASS : SPACE_CLASS;
+    if (code > 0xFFFF) return ASTRAL_CLASS;
+    if (WIDE_SCRIPT.test(ch)) return WIDE_CLASS;
+    if (/\p{Nd}/u.test(ch)) return DIGIT_CLASS;
+    if (/\p{Script=Latin}/u.test(ch)) return LATIN_CLASS;
+    for (const [pattern, cls] of SCRIPT_WEIGHTS) if (pattern.test(ch)) return cls;
+    if (/\p{L}/u.test(ch)) return OTHER_LETTER_CLASS;
+    return SYMBOL_CLASS;
+}
+
+function classify(ch) {
+    const code = ch.codePointAt(0);
+    if (code < 128) {
+        if (code === 10) return NEWLINE_CLASS;
+        if (code === 32 || (code >= 9 && code <= 13)) return SPACE_CLASS;
+        if ((code >= 65 && code <= 90) || (code >= 97 && code <= 122)) return LATIN_CLASS;
+        if (code >= 48 && code <= 57) return DIGIT_CLASS;
+        return SYMBOL_CLASS;
+    }
+    let cls = nonAsciiClasses.get(code);
+    if (!cls) {
+        cls = classifyNonAscii(ch, code);
+        if (nonAsciiClasses.size < 8192) nonAsciiClasses.set(code, cls);
+    }
+    return cls;
+}
+
+export function estimateTokens(text, charsPerToken = LATIN_CHARS_PER_TOKEN) {
+    const value = String(text ?? '');
+    const latin = 1 / Math.max(1, Number(charsPerToken) || LATIN_CHARS_PER_TOKEN);
+    let total = 0;
+    let run = 0;
+    let runTokens = 0;
+    let runLetters = false;
+    let runDigits = false;
+    const closeRun = () => {
+        total += run >= CODE_RUN_MIN && runLetters && runDigits ? Math.max(runTokens, run) : runTokens;
+        run = 0;
+        runTokens = 0;
+        runLetters = false;
+        runDigits = false;
+    };
+    for (const ch of value) {
+        const cls = classify(ch);
+        if (cls.space) { closeRun(); continue; }
+        if (cls.newline) { closeRun(); total += 1; continue; }
+        run++;
+        runTokens += cls.latin ? latin : cls.weight;
+        if (cls.letter) runLetters = true;
+        if (cls.digit) runDigits = true;
+    }
+    closeRun();
+    return Math.ceil(total);
+}
+
+export function condenseToTokenBudget(text, maxTokens, charsPerToken = LATIN_CHARS_PER_TOKEN) {
+    const value = String(text ?? '');
+    const budget = Math.max(0, Math.floor(Number(maxTokens) || 0));
+    if (estimateTokens(value, charsPerToken) <= budget) return value;
+
+    let low = 0;
+    let high = value.length;
+    let best = '';
+    while (low <= high) {
+        const mid = Math.floor((low + high) / 2);
+        const candidate = truncateMiddle(value, mid);
+        if (estimateTokens(candidate, charsPerToken) <= budget) {
+            best = candidate;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+    return best;
 }
 
 export function estimateNumCtx(promptText, {
-    charsPerToken  = 3,
+    charsPerToken  = LATIN_CHARS_PER_TOKEN,
     headroomTokens = 2048,
     minCtx         = 8192,
     maxCtx         = 32768
@@ -40,86 +131,94 @@ function composePrompt(instructions, chain, transcript) {
     return prompt;
 }
 
-/**
- * Build a prompt that is guaranteed to fit inside maxCtx minus reserved output.
- * Oldest context is dropped first. If the current transcript or instructions are
- * individually too large, their middle is condensed while preserving both ends.
- */
+export const MIN_CONTEXT_TOKENS = 512;
+
 export function buildBudgetedPrompt({ instructions = '', chain = [], transcript = '' }, {
     maxCtx = 32768,
     reserveTokens = 2048,
-    charsPerToken = 3
+    charsPerToken = LATIN_CHARS_PER_TOKEN
 } = {}) {
-    const maxChars = Math.max(256, (maxCtx - reserveTokens) * charsPerToken);
+    const maxTokens = Math.max(1, Math.floor(maxCtx - reserveTokens));
+    const tokensOf = text => estimateTokens(text, charsPerToken);
+
     let keptChain = [...(chain || [])];
     let keptInstructions = String(instructions || '').trim();
     let keptTranscript = String(transcript || '');
     let prompt = composePrompt(keptInstructions, keptChain, keptTranscript);
     let droppedContext = 0;
+    let condensedContext = false;
     let truncatedTranscript = false;
     let truncatedInstructions = false;
 
-    while (prompt.length > maxChars && keptChain.length) {
+    while (tokensOf(prompt) > maxTokens && keptChain.length > 1) {
         keptChain.shift();
         droppedContext++;
         prompt = composePrompt(keptInstructions, keptChain, keptTranscript);
     }
 
-    if (prompt.length > maxChars) {
-        const withoutTranscript = composePrompt(keptInstructions, keptChain, '').length;
-        const available = Math.max(128, maxChars - withoutTranscript);
-        const next = truncateMiddle(keptTranscript, available);
+    if (tokensOf(prompt) > maxTokens && keptChain.length === 1) {
+        const only = keptChain[0];
+        const room = maxTokens - tokensOf(composePrompt(keptInstructions, [{ ...only, text: '' }], keptTranscript));
+        if (room >= MIN_CONTEXT_TOKENS) {
+            const text = condenseToTokenBudget(only.text || '', room, charsPerToken);
+            condensedContext = text !== (only.text || '');
+            keptChain = [{ ...only, text }];
+        } else {
+            keptChain = [];
+            droppedContext++;
+        }
+        prompt = composePrompt(keptInstructions, keptChain, keptTranscript);
+    }
+
+    if (tokensOf(prompt) > maxTokens && keptTranscript) {
+        const overhead = tokensOf(composePrompt(keptInstructions, keptChain, ''));
+        const next = condenseToTokenBudget(keptTranscript, maxTokens - overhead, charsPerToken);
         truncatedTranscript = next !== keptTranscript;
         keptTranscript = next;
         prompt = composePrompt(keptInstructions, keptChain, keptTranscript);
     }
 
-    if (prompt.length > maxChars && keptInstructions) {
-        const withoutInstructions = composePrompt('', keptChain, keptTranscript).length;
-        const available = Math.max(64, maxChars - withoutInstructions);
-        const next = truncateMiddle(keptInstructions, available);
+    if (tokensOf(prompt) > maxTokens && keptInstructions) {
+        const overhead = tokensOf(composePrompt('', keptChain, keptTranscript));
+        const next = condenseToTokenBudget(keptInstructions, maxTokens - overhead, charsPerToken);
         truncatedInstructions = next !== keptInstructions;
         keptInstructions = next;
         prompt = composePrompt(keptInstructions, keptChain, keptTranscript);
     }
 
-    // Structural markers can make the estimate a few characters too large.
-    if (prompt.length > maxChars) prompt = truncateMiddle(prompt, maxChars);
+    if (tokensOf(prompt) > maxTokens) {
+        prompt = condenseToTokenBudget(prompt, maxTokens, charsPerToken);
+    }
 
     return {
         prompt,
         droppedContext,
+        condensedContext,
         truncatedTranscript,
         truncatedInstructions,
-        estimatedTokens: estimateTokens(prompt, charsPerToken)
+        estimatedTokens: tokensOf(prompt)
     };
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Reply model selection.
- *
- *  The stored model name and the models the server actually has can disagree,
- *  and every path that disagreed silently produced the same symptom: a reply
- *  that fails with a model-not-found error while transcription works fine. A
- *  fresh profile has never opened Settings, so its stored value is the built-in
- *  default, and the Settings picker used to be the only place the two were ever
- *  reconciled - which is why replies started working only after a visit there.
- *
- *  Preference order, most specific first:
- *    1. the stored choice, if the server still has it - an explicit user pick
- *       is never silently overridden;
- *    2. the preferred default, if installed;
- *    3. any model from the same family as the preferred default, so a server
- *       carrying a different size of the intended model is chosen over an
- *       unrelated one;
- *    4. whatever is installed, because any working model beats a failed reply.
- *  ────────────────────────────────────────────────────────────────────────── */
+const NON_GENERATIVE = /(^|[\/:-])(embed|embedding|reranker|rerank|bge|gte|nomic-embed|all-minilm|mxbai-embed)/i;
+
+export function isGenerativeModel(name) {
+    return !NON_GENERATIVE.test(String(name || ''));
+}
+
+export function isFallbackChoice(chosen, stored, available) {
+    const list = (available || []).map(n => String(n || '')).filter(Boolean);
+    const storedName = String(stored || '');
+    return !(storedName && list.includes(storedName)) && chosen !== storedName;
+}
+
 export function chooseReplyModel(available, stored, preferred) {
-    const list = (available || []).map(name => String(name || '')).filter(Boolean);
+    const all = (available || []).map(name => String(name || '')).filter(Boolean);
+    const generative = all.filter(isGenerativeModel);
+    const list = generative.length ? generative : all;
     const storedName = String(stored || '');
     const preferredName = String(preferred || '');
 
-    // Nothing to choose from: keep what we have rather than inventing a name.
     if (list.length === 0) return storedName || preferredName;
 
     if (storedName && list.includes(storedName)) return storedName;
@@ -133,25 +232,21 @@ export function chooseReplyModel(available, stored, preferred) {
     return list[0];
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Streamed NDJSON reply decoding.
- *
- *  Ollama answers /api/generate as newline-delimited JSON, and network reads cut
- *  that stream at arbitrary byte offsets: a single read can end mid-object, mid
- *  multi-byte character, or carry several complete objects at once. That framing
- *  logic used to live inline in reply.js, tangled with fetch, timeouts, abort
- *  signals and IndexedDB, so none of it could be tested. It is a pure state
- *  machine, so it lives here instead.
- *
- *  push(text) and flush() return an ordered event list:
- *    { type: 'first-token' }            once, before the first token event
- *    { type: 'token', token }           one per non-empty response fragment
- *    { type: 'done' }                   the server marked the stream complete
- *    { type: 'error', message }         the server reported a failure
- *
- *  Unparseable lines are skipped rather than fatal: a proxy injecting a keep-alive
- *  or a blank line must not abort a reply that is otherwise streaming fine.
- *  ────────────────────────────────────────────────────────────────────────── */
+export function describeLoadedModel(entry) {
+    const name = String((entry && (entry.name || entry.model)) || '');
+    if (!name) return null;
+    const size = Number(entry && entry.size);
+    const vram = Number(entry && entry.size_vram);
+    const measured = Number.isFinite(size) && size > 0 && Number.isFinite(vram) && vram >= 0;
+    const gpuPercent = measured ? Math.round(Math.min(1, vram / size) * 100) : null;
+    return {
+        name,
+        sizeBytes: measured ? size : null,
+        gpuPercent,
+        onCpu: gpuPercent !== null && gpuPercent < 100
+    };
+}
+
 export function createReplyStreamReader() {
     let buffer = '';
     let text = '';
@@ -178,7 +273,6 @@ export function createReplyStreamReader() {
     }
 
     return {
-        /** Feed decoded text from one network read. */
         push(chunkText) {
             const events = [];
             buffer += String(chunkText ?? '');
@@ -189,14 +283,12 @@ export function createReplyStreamReader() {
             }
             return events;
         },
-        /** Consume a final object that arrived without a trailing newline. */
         flush() {
             const events = [];
             if (buffer.trim()) consumeLine(buffer, events);
             buffer = '';
             return events;
         },
-        /** Everything received so far, concatenated. */
         get text() { return text; }
     };
 }

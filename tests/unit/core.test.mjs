@@ -1,30 +1,18 @@
 import { emitTestResult } from '../helpers/test-result.mjs';
-/* ==========================================================================
-   core.test.mjs - Zero-dependency tests for js/transcribe-core.js, the pure
-   transcript-assembly logic (chunk slicing, overlap trimming, and timeline
-   reassembly including the failed-chunk gap markers).
-
-   Run:  node tests/unit/core.test.mjs
-   (Node 18+; uses only built-ins - no test framework, no install step.)
-
-   These functions used to live inside transcribe.js, which imports db.js
-   (and opens IndexedDB at import time), so they were unreachable from a plain-
-   Node test. transcribe-core.js imports only config.js + dedup.js, both
-   side-effect-free, so the most
-   algorithmically subtle logic in the app is now directly testable.
-
-   En-dash note: the timestamp separator emitted by reassembleTimeline is U+2013
-   ("-", as in "[00:00-01:00]"), matching the source. The assertions below use
-   that exact character on purpose.
-   ========================================================================== */
 
 import {
+    GAP_MARKER,
+    SILENT_MARKER,
+    summarizeChunkLevel,
+    isNearSilent,
     planAudioChunks,
-    sliceAudioChunks,
     trimOverlapSegments,
     trimOverlapTextFallback,
     reassembleTimeline,
-    runPool
+    runPool,
+    planWholeFileDecode,
+    DECODED_BYTES_PER_SECOND,
+    WHOLE_FILE_DECODE_BUDGET_BYTES
 } from '../../src/js/transcribe-core.js';
 
 let passed = 0, failed = 0;
@@ -49,41 +37,7 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   sliceAudioChunks - 60 s core steps with ±3 s overlap windows
-   ────────────────────────────────────────────────────────────────────────── */
-{
-    // 150 s of audio → three 60 s cores (0-60, 60-120, 120-150).
-    const chunks = sliceAudioChunks(new Float32Array(SR * 150), SR, 60, 3);
-    eq(chunks.length, 3,                 'slice: 150s @ 60s step → 3 chunks');
-    eq(chunks.map(c => c.idx), [0, 1, 2], 'slice: idx runs 0..2');
 
-    ok(chunks[0].hasPreOverlap  === false, 'slice: first chunk has NO pre-overlap');
-    ok(chunks[0].hasPostOverlap === true,  'slice: first chunk HAS post-overlap');
-    ok(chunks[2].hasPreOverlap  === true,  'slice: last chunk HAS pre-overlap');
-    ok(chunks[2].hasPostOverlap === false, 'slice: last chunk has NO post-overlap');
-
-    eq(chunks[0].coreSec,    0,   'slice: chunk0 core starts at 0s');
-    eq(chunks[0].coreEndSec, 60,  'slice: chunk0 core ends at 60s');
-    eq(chunks[2].coreEndSec, 150, 'slice: last core clamps to clip end (150s)');
-
-    // First chunk: core + trailing overlap only (no leading overlap to add).
-    eq(chunks[0].audio.length, SR * (60 + 3),     'slice: chunk0 window = core + post-overlap');
-    // Middle chunk: leading + core + trailing overlap.
-    eq(chunks[1].audio.length, SR * (3 + 60 + 3), 'slice: middle window = pre + core + post');
-
-    // Boundary cases.
-    eq(sliceAudioChunks(new Float32Array(0), SR).length, 0, 'slice: empty audio → 0 chunks');
-
-    const short = sliceAudioChunks(new Float32Array(SR * 10), SR, 60, 3);
-    eq(short.length, 1, 'slice: 10s (< one step) → 1 chunk');
-    ok(short[0].hasPreOverlap === false && short[0].hasPostOverlap === false,
-       'slice: lone short chunk has neither overlap');
-    eq(short[0].coreEndSec, 10, 'slice: lone short chunk core ends at clip length');
-}
-
-
-/* planAudioChunks: descriptor-only planning used by bounded-memory transcription. */
 {
     const plan = planAudioChunks(SR * 150, SR, 60, 3);
     eq(plan.length, 3, 'plan: 150s → 3 descriptors');
@@ -92,18 +46,13 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
        'plan: middle descriptor includes ±3s overlap');
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   trimOverlapSegments - keep only segments whose MIDPOINT is in the core window
-   (remote/segment path). Window-relative times; core sits at [3, 63] here.
-   ────────────────────────────────────────────────────────────────────────── */
 {
-    // 3 s pre-overlap + 60 s core + 3 s post-overlap.
     const midChunk = { startSec: 57, coreSec: 60, coreEndSec: 120, endSec: 123 };
     const segs = [
-        { start: 0,  end: 2,  text: 'pre bleed' },   // mid 1.0  → drop (pre-overlap)
-        { start: 3,  end: 5,  text: 'real start' },  // mid 4.0  → keep
-        { start: 60, end: 63, text: 'real end' },    // mid 61.5 → keep
-        { start: 64, end: 66, text: 'post bleed' }   // mid 65.0 → drop (post-overlap)
+        { start: 0,  end: 2,  text: 'pre bleed' },
+        { start: 3,  end: 5,  text: 'real start' },
+        { start: 60, end: 63, text: 'real end' },
+        { start: 64, end: 66, text: 'post bleed' }
     ];
     eq(trimOverlapSegments(segs, midChunk).map(s => s.text),
        ['real start', 'real end'],
@@ -112,15 +61,10 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     eq(trimOverlapSegments([],   midChunk), [], 'trimSeg: empty segments → []');
     eq(trimOverlapSegments(null, midChunk), [], 'trimSeg: null segments → []');
 
-    // ±0.5 s tolerance: a segment whose midpoint sits just outside the core is
-    // still kept (guards against off-by-a-hair clipping of real words).
-    const edge = [{ start: 2, end: 3, text: 'edge' }]; // mid 2.5 == coreRelStart-0.5
+    const edge = [{ start: 2, end: 3, text: 'edge' }];
     eq(trimOverlapSegments(edge, midChunk).length, 1, 'trimSeg: keeps a segment within the 0.5s tolerance');
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   trimOverlapTextFallback - word-budget overlap trim when a server omits segments
-   ────────────────────────────────────────────────────────────────────────── */
 {
     const both      = { hasPreOverlap: true,  hasPostOverlap: true  };
     const firstOnly = { hasPreOverlap: false, hasPostOverlap: true  };
@@ -136,8 +80,6 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     eq(fo[0], 'w0',             'trimFallback: first chunk keeps the very first word');
     eq(fo.length, 92,           'trimFallback: first chunk trims only the trailing overlap');
 
-    // The min(8, floor(len*0.1)) cap protects short chunks: at 20 words the 10%
-    // budget (2) wins over the 8-word default, so only 2 words go each side.
     const w20 = Array.from({ length: 20 }, (_, i) => 'w' + i).join(' ');
     const o20 = trimOverlapTextFallback(w20, both).split(' ');
     eq(o20.length, 16,          'trimFallback: 20 words → 10% cap trims 2 each side');
@@ -150,11 +92,6 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     ok(cjkOut.length < cjk.length && cjkOut.length > 10, 'trimFallback: CJK text trims overlap by code point');
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
-   reassembleTimeline - ordered chunk results → one timestamped transcript
-   ────────────────────────────────────────────────────────────────────────── */
-
-// (a) two plain-text chunks join in order, timestamps from core start/end.
 {
     const r = [
         { coreSec: 0,  coreEndSec: 60,  chunkStartSec: 0,  text: 'hello world', segments: [] },
@@ -166,7 +103,6 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     ok(out.timestamped.includes('[01:00-02:00] goodbye now'), 'reassemble: chunk1 timestamp from core span');
 }
 
-// (b) seam overlap at a chunk boundary is trimmed (delegates to dedup.seamTrim).
 {
     const r = [
         { coreSec: 0,  coreEndSec: 60,  chunkStartSec: 0,  text: 'the quick brown fox', segments: [] },
@@ -176,9 +112,6 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
        'reassemble: seam-trims the duplicated boundary word');
 }
 
-// (c) a FAILED chunk in the middle leaves a visible gap, not a silent drop -
-//     and content on both sides survives. This is the regression most likely
-//     to break unnoticed (output just ends early / loses a minute).
 {
     const r = [
         { coreSec: 0,   coreEndSec: 60,  chunkStartSec: 0,   text: 'first part', segments: [] },
@@ -186,13 +119,15 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
         { coreSec: 120, coreEndSec: 180, chunkStartSec: 120, text: 'third part', segments: [] }
     ];
     const out = reassembleTimeline(r, 3);
-    ok(out.plain.includes('transcription unavailable'), 'reassemble: failed chunk leaves a visible gap marker');
+    ok(out.plain.includes(GAP_MARKER), 'reassemble: failed chunk leaves a visible gap marker, so the model knows words are missing');
     ok(out.plain.startsWith('first part'),              'reassemble: content BEFORE the gap is kept');
     ok(out.plain.endsWith('third part'),                'reassemble: content AFTER the gap is kept');
-    ok(out.timestamped.includes('[01:00-02:00] [⚠️'),   'reassemble: gap marker carries the failed span timestamp');
+    ok(out.timestamped.includes(`[01:00-02:00] ${GAP_MARKER}`),
+       'reassemble: gap marker carries the failed span timestamp');
+    ok(!out.timestamped.includes('⚠️'),
+       'reassemble: a hole in the transcript is stated, not flagged as a fault');
 }
 
-// (d) per-segment timestamps expand inside one chunk (abs = chunkStartSec + seg).
 {
     const r = [{
         coreSec: 0, coreEndSec: 60, chunkStartSec: 0, text: '',
@@ -207,13 +142,9 @@ async function waitUntil(predicate, message, timeoutMs = 1000) {
     ok(out.timestamped.includes('[00:05-00:07] beta'),  'reassemble: second segment abs time');
 }
 
-// (e) empty / all-null input → empty result (no crash).
 eq(reassembleTimeline([], 0),            { timestamped: '', plain: '' }, 'reassemble: no results → empty');
 eq(reassembleTimeline([null, null], 2),  { timestamped: '', plain: '' }, 'reassemble: all-null results → empty');
 
-// (f) null (never-attempted) chunks between real ones are skipped. In the live
-//     pipeline, transcribeChunked pre-fills trailing nulls with failed markers
-//     BEFORE calling this; reassemble itself just skips holes it is handed.
 {
     const r = [
         { coreSec: 0,   coreEndSec: 60,  chunkStartSec: 0,   text: 'aaa', segments: [] },
@@ -223,10 +154,6 @@ eq(reassembleTimeline([null, null], 2),  { timestamped: '', plain: '' }, 'reasse
     eq(reassembleTimeline(r, 3).plain, 'aaa ccc', 'reassemble: null (never-attempted) chunks are skipped');
 }
 
-
-/* ──────────────────────────────────────────────────────────────────────────
-   runPool - eager bounded concurrency for server transcription
-   ────────────────────────────────────────────────────────────────────────── */
 {
     const items = Array.from({ length: 23 }, (_, i) => i);
     const started = [];
@@ -299,7 +226,157 @@ eq(reassembleTimeline([null, null], 2),  { timestamped: '', plain: '' }, 'reasse
     eq(completed, [0, 1, 2], 'pool: invalid non-positive limits safely fall back to one worker');
 }
 
-/* ── report ── */
+{
+    const failed = i => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60,
+                           chunkStartSec: i * 60, text: '', segments: [], failed: true });
+    const good = (i, text) => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60,
+                                 chunkStartSec: i * 60, text, segments: [] });
+    const countMarkers = text => String(text).split(GAP_MARKER).length - 1;
+
+    const run = reassembleTimeline([failed(0), failed(1), failed(2)], 3);
+    eq(countMarkers(run.timestamped), 1,
+       'gaps: one unbroken run of failures is reported once, not once per chunk');
+    ok(run.timestamped.includes('[00:00-03:00]'),
+       'gaps: the single marker spans the whole run it replaces');
+    eq(countMarkers(run.plain), 1,
+       'gaps: the text handed to the model states the hole once');
+
+    const mixed = reassembleTimeline([good(0, 'alpha beta'), failed(1), failed(2), good(3, 'gamma')], 4);
+    eq(countMarkers(mixed.timestamped), 1,
+       'gaps: failures between real speech collapse into the one span they cover');
+    ok(mixed.timestamped.includes('[01:00-03:00]'),
+       'gaps: a collapsed run keeps the real start and end of the hole');
+    ok(/alpha beta/.test(mixed.plain) && /gamma/.test(mixed.plain),
+       'gaps: surrounding speech is unaffected by the exemption');
+
+    const seam = reassembleTimeline([good(0, 'alpha beta gamma'), good(1, 'beta gamma delta')], 2);
+    eq(seam.plain, 'alpha beta gamma delta',
+       'gaps: exempting placeholders does not weaken seam trimming for real speech');
+
+    eq(countMarkers(reassembleTimeline([good(0, 'x'), failed(1)], 2).plain), 1,
+       'gaps: a placeholder does not leak into the rolling seam tail');
+}
+
+{
+    const quiet = i => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60, chunkStartSec: i * 60,
+                          text: '', segments: [], failed: true, silent: true });
+    const good = (i, text) => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60, chunkStartSec: i * 60, text, segments: [] });
+    const out = reassembleTimeline([quiet(0), good(1, 'buy milk tomorrow'), quiet(2)], 3);
+    eq(out.plain, 'buy milk tomorrow',
+       'silence: the text handed to the model carries only what was said, never a no-speech note');
+    ok(out.timestamped.includes(SILENT_MARKER),
+       'silence: while the timestamped reading still says where it was quiet');
+}
+
+{
+    const silent = i => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60,
+                           chunkStartSec: i * 60, text: '', segments: [],
+                           failed: true, silent: true });
+    const failed = i => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60,
+                           chunkStartSec: i * 60, text: '', segments: [], failed: true });
+    const good = (i, text) => ({ coreSec: i * 60, coreEndSec: (i + 1) * 60,
+                                 chunkStartSec: i * 60, text, segments: [] });
+    const count = (text, marker) => String(text).split(marker).length - 1;
+
+    const quiet = reassembleTimeline([silent(0), silent(1), silent(2), silent(3)], 4);
+    eq(count(quiet.timestamped, SILENT_MARKER), 1,
+       'silence: twenty quiet minutes are one neutral note, not one per minute');
+    ok(quiet.timestamped.includes('[00:00-04:00]'),
+       'silence: the note covers the whole quiet stretch');
+    eq(count(quiet.timestamped, GAP_MARKER), 0,
+       'silence: nothing was spoken, so nothing is reported as unavailable');
+
+    const both = reassembleTimeline([silent(0), failed(1), silent(2)], 3);
+    eq(count(both.timestamped, SILENT_MARKER), 2,
+       'silence: a real hole between two quiet stretches keeps them apart');
+    eq(count(both.timestamped, GAP_MARKER), 1,
+       'silence: a section that genuinely failed is still reported as a failure');
+
+    const around = reassembleTimeline([good(0, 'alpha'), silent(1), good(2, 'beta')], 3);
+    ok(/alpha/.test(around.plain) && /beta/.test(around.plain),
+       'silence: speech on either side of a quiet stretch is untouched');
+}
+
+{
+    ok(isNearSilent(summarizeChunkLevel(new Float32Array(16000))),
+       'level: a buffer of digital silence reads as silent');
+    const hum = new Float32Array(16000);
+    for (let i = 0; i < hum.length; i++) hum[i] = Math.sin(i / 40) * 0.0008;
+    ok(isNearSilent(summarizeChunkLevel(hum)),
+       'level: inaudible room hum still counts as no speech');
+    const speech = new Float32Array(16000);
+    for (let i = 0; i < speech.length; i++) speech[i] = Math.sin(i / 8) * 0.22;
+    ok(!isNearSilent(summarizeChunkLevel(speech)),
+       'level: audio at speaking level is never written off as silence');
+    const blip = new Float32Array(16000);
+    blip[4000] = 0.9;
+    ok(!isNearSilent(summarizeChunkLevel(blip)),
+       'level: one loud transient keeps the section out of the silence bucket');
+    ok(summarizeChunkLevel(new Float32Array(0)) === null,
+       'level: an empty buffer yields no measurement to judge');
+    ok(isNearSilent(null) === false,
+       'level: an unmeasured section is never assumed silent');
+}
+
+{
+    const original = {
+        coreSec: 0, coreEndSec: 7, chunkStartSec: 0, text: '',
+        segments: [
+            { start: 0, end: 4, text: 'basic tests and should work', _reviewSuppressed: true },
+            { start: 2, end: 7, text: 'It should work without too much strain at all.', _reviewSuppressed: true }
+        ]
+    };
+    const reread = {
+        coreSec: 0, coreEndSec: 7, chunkStartSec: 0, text: '',
+        segments: [{ start: 0, end: 7, text: 'basic tests and should work without too much strain at all.' }]
+    };
+    const out = reassembleTimeline([original, reread], 2);
+    eq(out.plain, 'basic tests and should work without too much strain at all.',
+       'review: disproved overlapping observations are replaced by the audio-backed reread');
+    ok(!out.plain.includes('should work It should work'),
+       'review: the field-case duplicate cannot survive the replacement');
+}
+
+{
+    const tiny = planAudioChunks(16000 * 10, 16000, 0.00001, 0);
+    ok(Array.isArray(tiny) && tiny.length > 0 && tiny.length < 1e6,
+       'plan: a sub-sample step terminates instead of looping forever');
+    eq(planAudioChunks(16000 * 120, 16000, 60, 3).length, 2,
+       'plan: the normal 60 s step is unchanged by the guard');
+}
+
+{
+    const budget = 64 * 1024 * 1024;
+    const limitSec = Math.floor(budget / DECODED_BYTES_PER_SECOND);
+
+    const short = planWholeFileDecode({ durationMs: 60_000, budgetBytes: budget });
+    ok(short.allowed === true, 'budget: a one-minute recording is decodable');
+    eq(short.estimatedBytes, 60 * DECODED_BYTES_PER_SECOND,
+       'budget: the estimate is decoded bytes, not file bytes');
+
+    const atLimit = planWholeFileDecode({ durationMs: limitSec * 1000, budgetBytes: budget });
+    ok(atLimit.allowed === true, 'budget: exactly the budget is allowed');
+
+    const overLimit = planWholeFileDecode({ durationMs: (limitSec + 1) * 1000, budgetBytes: budget });
+    ok(overLimit.allowed === false, 'budget: one second past the budget is refused');
+    ok(/download/i.test(overLimit.reason),
+       'budget: a refusal says what to do with the recording instead');
+
+    const fiveHours = planWholeFileDecode({ durationMs: 5 * 3600 * 1000 });
+    ok(fiveHours.allowed === false,
+       'budget: a five-hour recording is refused under the shipped budget');
+    ok(fiveHours.estimatedBytes > WHOLE_FILE_DECODE_BUDGET_BYTES,
+       'budget: the shipped budget is smaller than a five-hour decode');
+
+    for (const bad of [0, -1, NaN, Infinity, null, undefined]) {
+        ok(planWholeFileDecode({ durationMs: bad }).allowed === false,
+           `budget: an unbudgetable length (${String(bad)}) is refused rather than guessed`);
+    }
+
+    ok(planWholeFileDecode().allowed === false,
+       'budget: no arguments at all is refused, not defaulted to permitted');
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 if (failed === 0) {
     console.log(`✓ all ${passed} assertions passed`);

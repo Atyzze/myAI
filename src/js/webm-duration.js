@@ -1,18 +1,3 @@
-/* ============================================================================
- * webm-duration.js - Remux MediaRecorder WebM/Opus into a normal seekable file.
- *
- * Chromium writes MediaRecorder WebM in "live" mode: the Segment has an
- * unknown size, Duration is omitted, Cues are omitted, and any existing
- * SeekHead can become stale if metadata is merely inserted in-place. Some
- * browsers tolerate that stream-oriented layout, but desktop players such as
- * VLC/mpv may keep the total length unknown and disable normal seeking.
- *
- * This module performs a container-only remux. Audio packets are not decoded or
- * re-encoded. It writes a finite Segment, replaces stale SeekHead/Cues, adds a
- * Duration value, and creates one CuePoint per Cluster. Cluster bytes stay
- * byte-for-byte unchanged.
- * ========================================================================== */
-
 const ID_EBML           = 0x1A45DFA3n;
 const ID_SEGMENT        = 0x18538067n;
 const ID_SEEK_HEAD      = 0x114D9B74n;
@@ -36,20 +21,25 @@ const ID_CUE_TRACK      = 0xF7n;
 const ID_CUE_CLUSTER_POS = 0xF1n;
 const ID_VOID           = 0xECn;
 const ID_CRC32          = 0xBFn;
+const ID_SIMPLE_BLOCK   = 0xA3n;
+const OPUS_FRAME_MS     = 20;
 
-const DEFAULT_TIMECODE_SCALE = 1_000_000; // ns per Segment tick
+const DEFAULT_TIMECODE_SCALE = 1_000_000;
 const AUDIO_TRACK_TYPE = 2;
 const SEGMENT_SIZE_BYTES = 8;
-export const WEBM_SEEKABLE_VERSION = 2;
+export const WEBM_SEEKABLE_VERSION = 3;
 
 const TOP_LEVEL_IDS = new Set([
     ID_SEEK_HEAD, ID_INFO, ID_TRACKS, ID_CLUSTER, ID_CUES,
-    0x1043A770n, // Chapters
-    0x1941A469n, // Attachments
-    0x1254C367n, // Tags
+    0x1043A770n,
+    0x1941A469n,
+    0x1254C367n,
     ID_VOID,
     ID_CRC32
 ]);
+
+const CLUSTER_TERMINATOR_IDS = new Set(
+    [...TOP_LEVEL_IDS].filter(id => id !== ID_VOID && id !== ID_CRC32));
 
 const ID_BYTES = new Map([
     [ID_SEEK_HEAD, new Uint8Array([0x11, 0x4D, 0x9B, 0x74])],
@@ -191,7 +181,7 @@ function findUnknownClusterEnd(bytes, cluster, segmentEnd) {
     let offset = cluster.dataStart;
     while (offset < segmentEnd) {
         const child = readElement(bytes, offset, segmentEnd);
-        if (TOP_LEVEL_IDS.has(child.id) && offset > cluster.dataStart) return offset;
+        if (CLUSTER_TERMINATOR_IDS.has(child.id) && offset > cluster.dataStart) return offset;
         if (child.unknownSize || child.dataEnd <= offset) {
             throw new Error('Unsupported unknown-size element inside WebM Cluster.');
         }
@@ -296,17 +286,6 @@ function findAudioTrack(bytes, tracks) {
     return audioTrack || firstTrack || 1;
 }
 
-function clusterTimestamp(bytes, cluster) {
-    let offset = cluster.dataStart;
-    while (offset < cluster.end) {
-        const child = readElement(bytes, offset, cluster.end);
-        if (child.id === ID_TIMESTAMP) return readUnsigned(bytes, child.dataStart, child.size) || 0;
-        if (child.unknownSize || child.dataEnd <= offset) break;
-        offset = child.dataEnd;
-    }
-    return 0;
-}
-
 function cuePoint(time, track, clusterPosition) {
     return element(ID_CUE_POINT, concatBytes(
         uintElement(ID_CUE_TIME, time),
@@ -339,126 +318,6 @@ function buildSeekHead(positions) {
     return element(ID_SEEK_HEAD, concatBytes(...entries));
 }
 
-/**
- * Remux a complete WebM byte array. Audio Cluster bytes are copied unchanged;
- * only container metadata and top-level ordering are rebuilt.
- */
-export function remuxWebmSeekableBytes(input, durationMs) {
-    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
-    const ms = Number(durationMs);
-    if (!Number.isFinite(ms) || ms <= 0) throw new Error('A positive recording duration is required.');
-
-    const parsed = parseTopLevel(bytes);
-    const info = parsed.children.find(child => child.id === ID_INFO);
-    const tracks = parsed.children.find(child => child.id === ID_TRACKS);
-    const clusters = parsed.children.filter(child => child.id === ID_CLUSTER);
-    if (!info || !tracks || clusters.length === 0) {
-        throw new Error('WebM is missing Info, Tracks, or Cluster data.');
-    }
-
-    const { timecodeScale } = inspectInfo(bytes, info);
-    const durationTicks = (ms * 1_000_000) / timecodeScale;
-    const rebuiltInfo = rebuildInfo(bytes, info, durationElement(durationTicks));
-    const track = findAudioTrack(bytes, tracks);
-
-    const clean = [];
-    for (const child of parsed.children) {
-        if (child.id === ID_SEEK_HEAD || child.id === ID_CUES || child.id === ID_VOID || child.id === ID_CRC32) continue;
-        if (child.id === ID_INFO) {
-            clean.push({ id: child.id, bytes: rebuiltInfo, length: rebuiltInfo.length, source: child });
-        } else {
-            const raw = bytes.slice(child.start, child.end);
-            clean.push({ id: child.id, bytes: raw, length: raw.length, source: child });
-        }
-    }
-
-    let seekHead = buildSeekHead({ info: 0, tracks: 0, cues: 0 });
-    let cues = new Uint8Array(0);
-    let layout = null;
-
-    for (let iteration = 0; iteration < 8; iteration++) {
-        let cursor = seekHead.length;
-        const positions = { info: null, tracks: null, cues: null };
-        const clusterLayouts = [];
-        layout = [];
-        for (const item of clean) {
-            if (item.id === ID_INFO && positions.info == null) positions.info = cursor;
-            if (item.id === ID_TRACKS && positions.tracks == null) positions.tracks = cursor;
-            if (item.id === ID_CLUSTER) {
-                clusterLayouts.push({
-                    position: cursor,
-                    time: clusterTimestamp(bytes, item.source)
-                });
-            }
-            layout.push({ ...item, position: cursor });
-            cursor += item.length;
-        }
-        positions.cues = cursor;
-        const nextCues = buildCues(clusterLayouts, track);
-        const nextSeekHead = buildSeekHead(positions);
-        const stable = nextSeekHead.length === seekHead.length && nextCues.length === cues.length;
-        seekHead = nextSeekHead;
-        cues = nextCues;
-        if (stable) break;
-    }
-
-    // Recompute one final layout with the settled SeekHead length.
-    let cursor = seekHead.length;
-    const finalPositions = { info: null, tracks: null, cues: null };
-    const finalClusters = [];
-    layout = [];
-    for (const item of clean) {
-        if (item.id === ID_INFO && finalPositions.info == null) finalPositions.info = cursor;
-        if (item.id === ID_TRACKS && finalPositions.tracks == null) finalPositions.tracks = cursor;
-        if (item.id === ID_CLUSTER) finalClusters.push({ position: cursor, time: clusterTimestamp(bytes, item.source) });
-        layout.push({ ...item, position: cursor });
-        cursor += item.length;
-    }
-    finalPositions.cues = cursor;
-    cues = buildCues(finalClusters, track);
-    seekHead = buildSeekHead(finalPositions);
-
-    // A changed SeekHead length would move every target. One final convergence
-    // pass is enough in practice because EBML integer widths change only at
-    // powers of 256, but assert rather than silently writing stale positions.
-    if (seekHead.length !== layout[0].position) {
-        cursor = seekHead.length;
-        finalPositions.info = finalPositions.tracks = null;
-        finalClusters.length = 0;
-        for (const item of clean) {
-            if (item.id === ID_INFO && finalPositions.info == null) finalPositions.info = cursor;
-            if (item.id === ID_TRACKS && finalPositions.tracks == null) finalPositions.tracks = cursor;
-            if (item.id === ID_CLUSTER) finalClusters.push({ position: cursor, time: clusterTimestamp(bytes, item.source) });
-            cursor += item.length;
-        }
-        finalPositions.cues = cursor;
-        cues = buildCues(finalClusters, track);
-        const converged = buildSeekHead(finalPositions);
-        if (converged.length !== seekHead.length) throw new Error('WebM metadata layout did not converge.');
-        seekHead = converged;
-    }
-
-    const body = concatBytes(seekHead, ...clean.map(item => item.bytes), cues);
-    const segmentId = bytes.slice(parsed.segment.start, parsed.segment.sizeOffset);
-    const prefix = bytes.slice(0, parsed.segment.start);
-    const output = concatBytes(
-        prefix,
-        segmentId,
-        encodeElementSize(body.length, SEGMENT_SIZE_BYTES),
-        body
-    );
-
-    return {
-        bytes: output,
-        durationMs: ms,
-        durationTicks,
-        timecodeScale,
-        cueCount: clusters.length,
-        finiteSegment: true
-    };
-}
-
-/** Read the Duration and Segment-size state from a complete WebM byte array. */
 export function inspectWebmDurationBytes(input) {
     const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
     const parsed = parseTopLevel(bytes);
@@ -517,26 +376,45 @@ class BlobEbmlReader {
             return this.cache.subarray(offset - this.cacheStart, end - this.cacheStart);
         }
         const fetchEnd = Math.min(this.blob.size, Math.max(end, offset + this.cacheBytes));
+        const bytes = new Uint8Array(await this.blob.slice(offset, fetchEnd).arrayBuffer());
         this.cacheStart = offset;
         this.cacheEnd = fetchEnd;
-        this.cache = new Uint8Array(await this.blob.slice(offset, fetchEnd).arrayBuffer());
-        return this.cache.subarray(0, end - offset);
+        this.cache = bytes;
+        return bytes.subarray(0, end - offset);
     }
+}
+
+function truncatedAtEnd(message, { header = false } = {}) {
+    const err = new Error(message);
+    err.truncated = true;
+    err.carriesNoAudio = header;
+    return err;
 }
 
 async function readBlobElement(reader, offset, logicalLimit) {
     const available = Math.min(16, logicalLimit - offset);
-    if (available <= 0) throw new Error('Unexpected end of WebM data.');
+    const atFileEnd = logicalLimit >= reader.blob.size;
+    if (available <= 0) throw truncatedAtEnd('Unexpected end of WebM data.', { header: true });
     const header = await reader.read(offset, available);
-    const id = readElementId(header, 0);
-    const size = readElementSize(header, id.length);
+    let id;
+    let size;
+    try {
+        id = readElementId(header, 0);
+        size = readElementSize(header, id.length);
+    } catch (err) {
+        if (available < 16 && atFileEnd) throw truncatedAtEnd(err.message, { header: true });
+        throw err;
+    }
     const dataStart = offset + id.length + size.length;
     const numericSize = size.unknown ? null : Number(size.value);
     if (!size.unknown && (!Number.isSafeInteger(numericSize) || numericSize < 0)) {
         throw new Error('WebM element is too large to process safely.');
     }
     const dataEnd = size.unknown ? logicalLimit : dataStart + numericSize;
-    if (!size.unknown && dataEnd > logicalLimit) throw new Error('Truncated WebM element payload.');
+    if (!size.unknown && dataEnd > logicalLimit) {
+        if (atFileEnd) throw truncatedAtEnd('Truncated WebM element payload.');
+        throw new Error('Truncated WebM element payload.');
+    }
     return {
         id: id.value,
         start: offset,
@@ -553,17 +431,69 @@ async function readBlobElement(reader, offset, logicalLimit) {
 async function findUnknownBlobClusterEnd(reader, cluster, segmentEnd) {
     let offset = cluster.dataStart;
     while (offset < segmentEnd) {
-        const child = await readBlobElement(reader, offset, segmentEnd);
-        if (TOP_LEVEL_IDS.has(child.id) && offset > cluster.dataStart) return offset;
+        let child;
+        try {
+            child = await readBlobElement(reader, offset, segmentEnd);
+        } catch (err) {
+            if (err && err.truncated) {
+                if (offset > cluster.dataStart) return { end: offset, cutShort: true };
+                err.carriesNoAudio = true;
+            }
+            throw err;
+        }
+        if (CLUSTER_TERMINATOR_IDS.has(child.id) && offset > cluster.dataStart) return { end: offset, cutShort: false };
         if (child.unknownSize || child.dataEnd <= offset) {
             throw new Error('Unsupported unknown-size element inside WebM Cluster.');
         }
         offset = child.dataEnd;
     }
-    return segmentEnd;
+    return { end: segmentEnd, cutShort: false };
 }
 
-async function parseBlobTopLevel(blob, reader) {
+const CLUSTER_TIMESTAMP_PREFIX_BYTES = 4 * 1024;
+const CLUSTER_TIMESTAMP_MAX_PREFIX_BYTES = 64 * 1024;
+
+function findClusterTimestamp(bytes, clusterStart) {
+    const id = readElementId(bytes, 0);
+    if (id.value !== ID_CLUSTER) throw new Error('Expected a WebM Cluster.');
+    const size = readElementSize(bytes, id.length);
+    let offset = id.length + size.length;
+    while (offset < bytes.length) {
+        let child;
+        try {
+            child = readElement(bytes, offset, bytes.length);
+        } catch (_) {
+            return null;
+        }
+        if (child.id === ID_TIMESTAMP) {
+            const ticks = readUnsigned(bytes, child.dataStart, child.size || 0);
+            if (ticks == null) throw new Error('Invalid WebM Cluster timestamp.');
+            return {
+                ticks,
+                size: child.size,
+                dataStart: clusterStart + child.dataStart,
+                dataEnd: clusterStart + child.dataEnd
+            };
+        }
+        if (child.unknownSize || child.dataEnd <= offset) return null;
+        offset = child.dataEnd;
+    }
+    return null;
+}
+
+async function clusterTimestampDetailsFromBlob(reader, cluster) {
+    const span = cluster.end - cluster.start;
+    const windows = [CLUSTER_TIMESTAMP_PREFIX_BYTES, CLUSTER_TIMESTAMP_MAX_PREFIX_BYTES];
+    for (const want of windows) {
+        const length = Math.min(span, want);
+        const found = findClusterTimestamp(await reader.read(cluster.start, length), cluster.start);
+        if (found) return found;
+        if (length >= span) break;
+    }
+    throw new Error('WebM Cluster is missing its Timestamp element.');
+}
+
+async function parseBlobTopLevel(blob, reader, { tolerateTruncation = false } = {}) {
     let offset = 0;
     let ebml = null;
     let segment = null;
@@ -581,57 +511,45 @@ async function parseBlobTopLevel(blob, reader) {
 
     const segmentEnd = segment.unknownSize ? blob.size : segment.dataEnd;
     const children = [];
+    let truncatedAt = null;
+    let trimmedTailBytes = 0;
     offset = segment.dataStart;
     while (offset < segmentEnd) {
-        const child = await readBlobElement(reader, offset, segmentEnd);
-        let end = child.dataEnd;
-        if (child.unknownSize) {
-            if (child.id !== ID_CLUSTER) throw new Error('Unsupported unknown-size top-level WebM element.');
-            end = await findUnknownBlobClusterEnd(reader, child, segmentEnd);
+        try {
+            const child = await readBlobElement(reader, offset, segmentEnd);
+            let end = child.dataEnd;
+            let cutShort = false;
+            if (child.unknownSize) {
+                if (child.id !== ID_CLUSTER) throw new Error('Unsupported unknown-size top-level WebM element.');
+                ({ end, cutShort } = await findUnknownBlobClusterEnd(reader, child, segmentEnd));
+            }
+            if (end <= offset || end > segmentEnd) throw new Error('Malformed WebM top-level element.');
+            const timestamp = child.id === ID_CLUSTER
+                ? await clusterTimestampDetailsFromBlob(reader, { ...child, end })
+                : null;
+            children.push({ ...child, end, timestamp });
+            offset = end;
+            if (cutShort) {
+                trimmedTailBytes = blob.size - end;
+                break;
+            }
+        } catch (err) {
+            if (err && err.truncated && err.carriesNoAudio && children.length > 0) {
+                trimmedTailBytes = blob.size - offset;
+                break;
+            }
+            if (!tolerateTruncation || children.length === 0) throw err;
+            truncatedAt = { offset, reason: err && err.message ? err.message : String(err) };
+            break;
         }
-        if (end <= offset || end > segmentEnd) throw new Error('Malformed WebM top-level element.');
-        children.push({ ...child, end });
-        offset = end;
     }
-    return { ebml, segment, segmentEnd, children };
+    return { ebml, segment, segmentEnd, children, truncatedAt, trimmedTailBytes };
 }
 
 async function readLocalElement(reader, source) {
     const bytes = new Uint8Array(await reader.blob.slice(source.start, source.end).arrayBuffer());
     const local = readElement(bytes, 0, bytes.length);
     return { bytes, element: { ...local, end: bytes.length } };
-}
-
-async function clusterTimestampDetailsFromBlob(reader, cluster) {
-    // Timestamp is required near the beginning of every Cluster. Read only a
-    // bounded prefix: long recordings may contain thousands of large Clusters,
-    // and materializing each one would defeat the streaming transcription path.
-    const prefixEnd = Math.min(cluster.end, cluster.start + 64 * 1024);
-    const bytes = new Uint8Array(await reader.blob.slice(cluster.start, prefixEnd).arrayBuffer());
-    const id = readElementId(bytes, 0);
-    if (id.value !== ID_CLUSTER) throw new Error('Expected a WebM Cluster.');
-    const size = readElementSize(bytes, id.length);
-    let offset = id.length + size.length;
-    while (offset < bytes.length) {
-        const child = readElement(bytes, offset, bytes.length);
-        if (child.id === ID_TIMESTAMP) {
-            const ticks = readUnsigned(bytes, child.dataStart, child.size || 0);
-            if (ticks == null) throw new Error('Invalid WebM Cluster timestamp.');
-            return {
-                ticks,
-                size: child.size,
-                dataStart: cluster.start + child.dataStart,
-                dataEnd: cluster.start + child.dataEnd
-            };
-        }
-        if (child.unknownSize || child.dataEnd <= offset) break;
-        offset = child.dataEnd;
-    }
-    throw new Error('WebM Cluster is missing its Timestamp element.');
-}
-
-async function clusterTimestampFromBlob(reader, cluster) {
-    return (await clusterTimestampDetailsFromBlob(reader, cluster)).ticks;
 }
 
 function buildIndexedMetadata(clean, track) {
@@ -662,19 +580,29 @@ function buildIndexedMetadata(clean, track) {
     throw new Error('WebM metadata layout did not converge.');
 }
 
-/**
- * Inspect a WebM/Opus Blob once and retain only its small container metadata and
- * Cluster coordinates. The returned source can create independent decode-sized
- * WebM windows without reading or decoding the complete recording. This is the
- * basis for multi-hour compressed transcription.
- */
-export async function prepareWebmChunkSource(blob, durationMs = 0) {
+export function estimateTruncatedDurationSec(startSecs) {
+    const starts = (startSecs || []).map(Number).filter(Number.isFinite);
+    if (starts.length === 0) return 0;
+    const last = starts[starts.length - 1];
+    const gaps = [];
+    for (let i = 1; i < starts.length; i++) {
+        const gap = starts[i] - starts[i - 1];
+        if (gap > 0) gaps.push(gap);
+    }
+    if (gaps.length === 0) return last + 0.001;
+    gaps.sort((a, b) => a - b);
+    const mid = Math.floor(gaps.length / 2);
+    const median = gaps.length % 2 === 1 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2;
+    return last + Math.max(0.001, median);
+}
+
+export async function prepareWebmChunkSource(blob, durationMs = 0, { tolerateTruncation = false } = {}) {
     if (!(blob instanceof Blob)) throw new TypeError('Expected a Blob.');
     const type = String(blob.type || '').toLowerCase();
     if (!type.includes('webm')) return null;
 
     const reader = new BlobEbmlReader(blob);
-    const parsed = await parseBlobTopLevel(blob, reader);
+    const parsed = await parseBlobTopLevel(blob, reader, { tolerateTruncation });
     const infoSource = parsed.children.find(child => child.id === ID_INFO);
     const tracksSource = parsed.children.find(child => child.id === ID_TRACKS);
     const clusterSources = parsed.children.filter(child => child.id === ID_CLUSTER);
@@ -685,12 +613,13 @@ export async function prepareWebmChunkSource(blob, durationMs = 0) {
     const localInfo = await readLocalElement(reader, infoSource);
     const localTracks = await readLocalElement(reader, tracksSource);
     const { timecodeScale, duration } = inspectInfo(localInfo.bytes, localInfo.element);
-    findAudioTrack(localTracks.bytes, localTracks.element); // validate an audio track exists
+    findAudioTrack(localTracks.bytes, localTracks.element);
 
     const clusters = [];
     let previousTicks = -1;
     for (const cluster of clusterSources) {
-        const timestamp = await clusterTimestampDetailsFromBlob(reader, cluster);
+        const timestamp = cluster.timestamp;
+        if (!timestamp) throw new Error('WebM Cluster is missing its Timestamp element.');
         if (timestamp.ticks < previousTicks) {
             throw new Error('WebM Cluster timestamps are not monotonic.');
         }
@@ -704,6 +633,9 @@ export async function prepareWebmChunkSource(blob, durationMs = 0) {
             startSec: timestamp.ticks * timecodeScale / 1_000_000_000
         });
     }
+    if (parsed.truncatedAt && clusters.length < 2) {
+        throw new Error(`WebM container ends at byte ${parsed.truncatedAt.offset} before a usable amount of audio was indexed (${parsed.truncatedAt.reason}).`);
+    }
 
     const declaredDurationSec = Number(durationMs) > 0 ? Number(durationMs) / 1000 : 0;
     const infoDurationSec = duration && (duration.size === 4 || duration.size === 8)
@@ -714,12 +646,10 @@ export async function prepareWebmChunkSource(blob, durationMs = 0) {
             return Number.isFinite(ticks) ? ticks * timecodeScale / 1_000_000_000 : 0;
         })()
         : 0;
-    // The recording row's elapsed duration is the most reliable value for a live
-    // MediaRecorder file. Existing Duration metadata is a fallback. A final
-    // Cluster has no explicit end, so retain a small conservative tail only when
-    // neither source supplies one.
     const finalStartSec = clusters[clusters.length - 1].startSec;
-    const durationSec = Math.max(declaredDurationSec, infoDurationSec, finalStartSec + 0.001);
+    const durationSec = parsed.truncatedAt
+        ? estimateTruncatedDurationSec(clusters.map(cluster => cluster.startSec))
+        : Math.max(declaredDurationSec, infoDurationSec, finalStartSec + 0.001);
     for (let i = 0; i < clusters.length; i++) {
         clusters[i].endSec = i + 1 < clusters.length
             ? Math.max(clusters[i].startSec, clusters[i + 1].startSec)
@@ -737,17 +667,41 @@ export async function prepareWebmChunkSource(blob, durationMs = 0) {
         tracksBytes: localTracks.bytes,
         timecodeScale,
         durationSec,
-        clusters
+        clusters,
+        truncatedAt: parsed.truncatedAt
     };
 }
 
-/**
- * Create a finite standalone WebM containing only the Clusters needed to decode
- * one requested time window. Cluster timestamps are rebased to zero by replacing
- * only their Timestamp payload bytes; compressed Opus packets remain untouched.
- * The caller trims `trimStartSec` after decoding to reach the exact requested
- * boundary because Cluster boundaries usually precede it slightly.
- */
+export async function webmAudioEndMs(blob) {
+    const source = await prepareWebmChunkSource(blob, 0, { tolerateTruncation: true });
+    if (!source || !source.clusters.length) return null;
+    const reader = new BlobEbmlReader(blob);
+    const last = source.clusters[source.clusters.length - 1];
+    const ticks = [];
+    let offset = last.dataStart;
+    while (offset < last.end) {
+        let child;
+        try { child = await readBlobElement(reader, offset, last.end); } catch (_) { break; }
+        if (child.id === ID_SIMPLE_BLOCK && child.dataEnd - child.dataStart >= 3) {
+            const head = await reader.read(child.dataStart, Math.min(11, child.dataEnd - child.dataStart));
+            const trackLength = vintLength(head[0]);
+            if (head.length >= trackLength + 2) {
+                const relative = ((head[trackLength] << 8) | head[trackLength + 1]) << 16 >> 16;
+                ticks.push(last.timestampTicks + relative);
+            }
+        }
+        if (child.unknownSize || child.dataEnd <= offset) break;
+        offset = child.dataEnd;
+    }
+    const tickMs = source.timecodeScale / 1_000_000;
+    if (!ticks.length) return last.timestampTicks * tickMs;
+    const steps = [];
+    for (let i = 1; i < ticks.length; i++) if (ticks[i] > ticks[i - 1]) steps.push(ticks[i] - ticks[i - 1]);
+    steps.sort((a, b) => a - b);
+    const frameMs = steps.length ? steps[Math.floor(steps.length / 2)] * tickMs : OPUS_FRAME_MS;
+    return Math.max(...ticks) * tickMs + frameMs;
+}
+
 export async function makeWebmDecodeChunk(source, startSec, endSec) {
     if (!source || source.kind !== 'myai-webm-chunk-source-v1') {
         throw new TypeError('Expected a prepared WebM chunk source.');
@@ -805,12 +759,20 @@ export async function makeWebmDecodeChunk(source, startSec, endSec) {
     };
 }
 
-/**
- * Return a standards-oriented, seekable WebM Blob. This is a container remux:
- * Opus packets are preserved exactly and are never decoded or re-encoded. The
- * Blob path scans through a 1 MiB window and returns original Cluster slices,
- * avoiding whole-file materialization for long compressed recordings.
- */
+async function knownSizeCluster(reader, cluster) {
+    const size = encodeElementSize(cluster.end - cluster.dataStart, cluster.sizeLength);
+    if (size.length !== cluster.sizeLength) return reader.blob.slice(cluster.start, cluster.end);
+    const id = new Uint8Array(await reader.read(cluster.start, cluster.idLength));
+    return new Blob([id, size, reader.blob.slice(cluster.dataStart, cluster.end)]);
+}
+
+export function needsSeekableUpgrade(rec) {
+    return !!(rec && Number(rec.audioBytes) > 0 && rec.format === 'opus')
+        && String(rec.mime || '').toLowerCase().includes('webm')
+        && Number(rec.durationMs) > 0
+        && Number(rec.webmSeekableVersion || 0) < WEBM_SEEKABLE_VERSION;
+}
+
 export async function makeWebmSeekable(blob, durationMs) {
     if (!(blob instanceof Blob)) throw new TypeError('Expected a Blob.');
     const type = String(blob.type || '').toLowerCase();
@@ -834,11 +796,6 @@ export async function makeWebmSeekable(blob, durationMs) {
     const rebuiltInfo = rebuildInfo(localInfo.bytes, localInfo.element, durationElement(durationTicks));
     const track = findAudioTrack(localTracks.bytes, localTracks.element);
 
-    const clusterTimes = new Map();
-    for (const cluster of clusterSources) {
-        clusterTimes.set(cluster.start, await clusterTimestampFromBlob(reader, cluster));
-    }
-
     const clean = [];
     for (const child of parsed.children) {
         if (child.id === ID_SEEK_HEAD || child.id === ID_CUES || child.id === ID_VOID || child.id === ID_CRC32) continue;
@@ -847,9 +804,11 @@ export async function makeWebmSeekable(blob, durationMs) {
         } else {
             clean.push({
                 id: child.id,
-                part: blob.slice(child.start, child.end),
+                part: child.id === ID_CLUSTER && child.unknownSize
+                    ? await knownSizeCluster(reader, child)
+                    : blob.slice(child.start, child.end),
                 length: child.end - child.start,
-                clusterTime: child.id === ID_CLUSTER ? clusterTimes.get(child.start) || 0 : null
+                clusterTime: child.id === ID_CLUSTER ? (child.timestamp ? child.timestamp.ticks : 0) : null
             });
         }
     }

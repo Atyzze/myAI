@@ -1,7 +1,4 @@
 import { emitTestResult } from '../helpers/test-result.mjs';
-/* Zero-dependency checks for the cross-tab recording lease fallback.
- * Run from repository root: node tests/unit/recording-lock.test.mjs
- */
 class MemoryStorage {
     #values = new Map();
     getItem(key) { return this.#values.has(key) ? this.#values.get(key) : null; }
@@ -15,6 +12,9 @@ Object.defineProperty(globalThis, 'sessionStorage', { value: new MemoryStorage()
 Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
 
 const lock = await import('../../src/js/recording-lock.js');
+function eq(actual, expected, message) {
+    ok(actual === expected, `${message} (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`);
+}
 let assertions = 0;
 function ok(value, message) {
     assertions++;
@@ -40,6 +40,20 @@ ok(!lock.isRecordOwnedByLiveTab({ id: 7, ownerId, sessionId: 'session-b', heartb
 ok(!lock.isRecordOwnedByLiveTab({ id: 8, ownerId, sessionId: 'session-a', heartbeatAt: now }, now), 'different recording id is not live');
 ok(!lock.isRecordOwnedByLiveTab({ id: 7, ownerId: 'other', sessionId: 'session-a', heartbeatAt: now }, now), 'different owner is not live');
 ok(!lock.isRecordOwnedByLiveTab({ id: 7, ownerId, sessionId: 'session-a', heartbeatAt: now - 20000 }, now), 'stale row heartbeat is not live');
+
+const quietRow = { id: 7, ownerId, sessionId: 'session-a', heartbeatAt: now - 50000 };
+const beat = { recId: 7, ownerId, sessionId: 'session-a', heartbeatAt: now - 1000 };
+ok(lock.isRecordOwnedByLiveTab(quietRow, now, beat),
+   'a row written a while ago is live when its small capture beat is fresh');
+eq(lock.recordHeartbeatAt(quietRow, beat), now - 1000, 'the newer of the row and its beat is the heartbeat');
+ok(lock.recordHeartbeatAt(quietRow, { ...beat, ownerId: 'someone-else' }) === quietRow.heartbeatAt,
+   'a beat from another tab does not keep a row alive');
+ok(lock.recordHeartbeatAt(quietRow, { ...beat, sessionId: 'session-b' }) === quietRow.heartbeatAt,
+   'nor does a beat from an earlier session of the same recording');
+ok(lock.recordHeartbeatAt(quietRow, { ...beat, recId: 8 }) === quietRow.heartbeatAt,
+   'nor a beat of another recording');
+ok(lock.recordHeartbeatAt({ ...quietRow, ownerId: undefined }, beat) === quietRow.heartbeatAt,
+   'and a row no tab owns any more, such as a finalized one, is not revived by a leftover beat');
 unsubscribe();
 
 localStorage.setItem(lock.RECORDING_LEASE_KEY, '{not-json');

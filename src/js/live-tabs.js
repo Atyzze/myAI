@@ -1,35 +1,29 @@
-/* ==========================================================================
- *  live-tabs.js - Live transcript log + reply stream registries, popup tabs,
- *                 and the shared (cancellable) live-status bar.
- *  ========================================================================== */
-import { escapeHtml, escapeAttr } from './config.js';
+import { escapeHtml } from './config.js';
 import { openInlineLiveView, inlineLiveViewKey } from './live-inline.js';
+import { createLiveLogRenderer, createReplyRenderer } from './live-render.js';
 
-/* The popup documents contain NO inline script. A blob: document inherits the
-   opener's CSP, and index.html ships `script-src 'self' blob:` with no
-   'unsafe-inline', so an inline <script> is refused and the popup never boots.
-   Behaviour therefore lives in src/js/live-view.js, loaded as an external
-   same-origin module, and per-popup configuration is passed on a data attribute
-   rather than in a second inline script. */
-const LIVE_VIEW_URL = new URL('./live-view.js', import.meta.url).href;
-
-/* How long the opener waits for a popup to report readiness before telling the
-   user something is wrong. Previously this loop was unbounded, so a popup that
-   could never boot showed a plausible "waiting" state forever. */
 const READY_POLL_MS   = 80;
 const READY_TIMEOUT_MS = 15000;
+const FRAME_FALLBACK_MS = 100;
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  1. LIVE TRANSCRIPT LOG
- *  recId → { meta: string[], parts: {text,startSec,endSec}[], listeners: fn[] }
- *
- *  Both this registry and the reply-stream registry below are bounded: a
- *  long-lived PWA could otherwise accumulate every recording's full transcript
- *  parts / reply token string in memory forever. We retain the most-recently
- *  touched LIVE_CAP entries (plenty to reopen a recent live view) and evict the
- *  oldest. An evicted entry just stops live-updating any (almost certainly
- *  already-closed) popup for a long-finished recording.
- *  ────────────────────────────────────────────────────────────────────────── */
+const VIEW_TITLE = {
+  livelog:     label => `📝 ${label || 'Recording'}`,
+  replystream: label => `🧠 AI Reply - ${label || 'Recording'}`
+};
+const VIEW_ACCENT = {
+  livelog:     '#ffa726',
+  replystream: '#4caf50'
+};
+
+const LIVE_VIEW_COLORS = {
+  chrome:  '#111',
+  page:    '#0d0d0d',
+  body:    '#e8e8e8',
+  status:  '#8a8a8a',
+  footer:  '#8a8a8a',
+  stamp:   '#8a8a8a'
+};
+
 const LIVE_CAP = 30;
 
 function _touchEvict(store, order, key) {
@@ -45,25 +39,26 @@ function _touchEvict(store, order, key) {
 const _liveLogs      = {};
 const _liveLogOrder  = [];
 
-/* Reset a registry entry IN PLACE.
-   Replacing the object instead (`store[id] = {...}`) silently orphaned any popup
-   already attached to it: openLiveLogTab/openReplyStreamTab resolve the entry at
-   open time but attach their listener asynchronously, after the popup reports
-   ready, so a re-init landing in that gap wired the window to a dead object and
-   no further event ever reached it. Listeners are preserved and told to clear. */
+let _generationCounter = 0;
+
 function resetEntry(store, order, recId, blank) {
+  const generation = ++_generationCounter;
   const existing = store[recId];
   if (existing) {
-    Object.assign(existing, blank);
+    Object.assign(existing, blank, { generation });
     _touchEvict(store, order, recId);
     for (const fn of [...existing.listeners]) {
       try { fn({ type: 'reset' }); } catch (_) {}
     }
     return existing;
   }
-  store[recId] = { ...blank, listeners: [] };
+  store[recId] = { ...blank, generation, listeners: [] };
   _touchEvict(store, order, recId);
   return store[recId];
+}
+
+function ownsEntry(entry, generation) {
+  return !!entry && (generation == null || entry.generation === generation);
 }
 
 export function liveLogInit(recId)  {
@@ -85,24 +80,21 @@ export function liveLogText(recId, chunkIndex, text, startSec, endSec, hasSeg) {
   );
 }
 
-/* Everything already buffered, in the order a fresh view must apply it. Shared
-   by the popup handshake and the in-page panel so the two cannot drift. */
 function liveLogSnapshot(entry) {
-  const messages = entry.meta.map(line => ({ type: 'meta', line }));
+  const messages = [];
   entry.parts.forEach((part, idx) => {
     if (part === undefined) return;
     messages.push({
       type: 'text', chunkIndex: idx,
-      text: part.text, startSec: part.startSec, endSec: part.endSec, hasSeg: part.hasSeg
+      text: part.text, startSec: part.startSec, endSec: part.endSec,
+      hasSeg: part.hasSeg, final: !!part.final
     });
   });
+  for (const line of entry.meta) messages.push({ type: 'meta', line });
   return messages;
 }
 
-/** Replay the buffer into onMessage, then forward future events. Returns an
-    unsubscribe function. This is the in-page equivalent of the popup handshake,
-    minus the window, the origin and the postMessage hop. */
-export function subscribeLiveLog(recId, onMessage) {
+function subscribeLiveLog(recId, onMessage) {
   const entry = _liveLogs[recId] || liveLogInit(recId);
   for (const msg of liveLogSnapshot(entry)) onMessage(msg);
   return attachCallbackListener(entry, `inline-livelog-${recId}`, onMessage);
@@ -111,10 +103,9 @@ export function subscribeLiveLog(recId, onMessage) {
 export function openLiveLogTab(recId, recLabel) {
   const log = _liveLogs[recId] || liveLogInit(recId);
   if (prefersInlineView()) return openInlineLiveLog(recId, recLabel);
-  const sig = randomToken();
-  const win = openLiveWindow(`livelog-${recId}`, buildLiveLogHtml(recLabel, sig));
+  const win = openLiveWindow(`livelog-${recId}`, buildLiveLogHtml(recLabel));
   if (!win) return canRenderInline() ? openInlineLiveLog(recId, recLabel) : null;
-  pumpToWindow(win, log, 'livelog', sig, liveLogSnapshot);
+  driveWindow(win, log, 'livelog', liveLogSnapshot, canRenderInline() ? () => openInlineLiveLog(recId, recLabel) : null);
   return win;
 }
 
@@ -122,67 +113,50 @@ function openInlineLiveLog(recId, recLabel) {
   return openInlineLiveView({
     key:       `livelog-${recId}`,
     kind:      'livelog',
-    title:     `📝 ${recLabel || 'Recording'}`,
-    accent:    '#ffa726',
+    title:     VIEW_TITLE.livelog(recLabel),
+    accent:    VIEW_ACCENT.livelog,
     subscribe: onMessage => subscribeLiveLog(recId, onMessage)
   });
 }
 
-function buildLiveLogHtml(recLabel, sig) {
-  // Escape the label: it's the recording filename, which can contain
-  // user-influenced characters and would otherwise break out of <title>/<div>.
-  const title = escapeHtml(recLabel || 'Recording');
+function buildLiveLogHtml(recLabel) {
+  const title = escapeHtml(VIEW_TITLE.livelog(recLabel));
   return liveDocument({
-    channel: 'livelog',
-    sig,
-    title: `📝 ${title}`,
-    accent: '#ffa726',
+    title,
+    accent: VIEW_ACCENT.livelog,
     status: '⏳ Processing...',
     footer: 'Starting...',
     styles: `
   #transcript{flex:1;overflow-y:auto;padding:24px 28px;white-space:pre-wrap;word-break:break-word;line-height:1.8}
   .chunk-sep{display:block;height:0.5em}
   .chunk-block{display:block}
-  .ts{font-size:11px;font-family:monospace;color:#555;user-select:none;margin-right:4px}`,
+  .ts{font-size:11px;font-family:monospace;color:${LIVE_VIEW_COLORS.stamp};user-select:none;margin-right:4px}`,
     body: `<div id="transcript"></div>`
   });
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  2. REPLY STREAM
- *  recId → { tokens: string, listeners: fn[], done: bool }
- *  Bounded with the same LRU policy as the live-log registry above.
- *  ────────────────────────────────────────────────────────────────────────── */
 const _replyStreams     = {};
 const _replyStreamOrder = [];
 
-/* Throughput is measured HERE rather than in the views, because a view can be
-   opened at any point and must still show the real numbers. The registry sees
-   every append; a late-opening view receives one replayed blob carrying the
-   whole buffer, so counting events there would report one token for a finished
-   answer. Every token message therefore carries the running totals, and the
-   views only format them.
-
-   Tokens are counted as server response objects. Ollama emits one per decoded
-   token, so the count matches its own eval count, and the rate is measured from
-   the FIRST token so that prompt evaluation (which can dominate on a long
-   transcript) is not averaged into the generation speed. */
 export function replyStreamInit(recId)   {
   return resetEntry(_replyStreams, _replyStreamOrder, recId,
-                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', done: false });
+                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', done: false })
+         .generation;
 }
 
-/** Name the model answering this stream, so the view can show what produced it. */
-export function replyStreamModel(recId, model) {
-  if (!_replyStreams[recId]) replyStreamInit(recId);
-  const name = String(model || '');
-  _replyStreams[recId].model = name;
-  _replyStreams[recId].listeners.forEach(fn => fn({ type: 'model', model: name }));
-}
-
-export function replyStreamAppend(recId, token) {
+export function replyStreamModel(recId, model, generation = null) {
   if (!_replyStreams[recId]) replyStreamInit(recId);
   const entry = _replyStreams[recId];
+  if (!ownsEntry(entry, generation)) return;
+  const name = String(model || '');
+  entry.model = name;
+  entry.listeners.forEach(fn => fn({ type: 'model', model: name }));
+}
+
+export function replyStreamAppend(recId, token, generation = null) {
+  if (!_replyStreams[recId]) replyStreamInit(recId);
+  const entry = _replyStreams[recId];
+  if (!ownsEntry(entry, generation)) return;
   const now = Date.now();
   entry.tokens += token;
   entry.count += 1;
@@ -192,9 +166,10 @@ export function replyStreamAppend(recId, token) {
   entry.listeners.forEach(fn => fn({ type: 'token', token, ...stats }));
 }
 
-export function replyStreamDone(recId) {
+export function replyStreamDone(recId, generation = null) {
   const s = _replyStreams[recId];
-  if (!s || s.done) return;          // idempotent
+  if (!s || s.done) return;
+  if (!ownsEntry(s, generation)) return;
   s.done = true;
   s.listeners.forEach(fn => fn({ type: 'done' }));
 }
@@ -215,18 +190,20 @@ function replyStreamSnapshot(entry) {
 }
 
 export function subscribeReplyStream(recId, onMessage) {
-  const entry = _replyStreams[recId] || replyStreamInit(recId);
+  if (!_replyStreams[recId]) replyStreamInit(recId);
+  const entry = _replyStreams[recId];
   for (const msg of replyStreamSnapshot(entry)) onMessage(msg);
   return attachCallbackListener(entry, `inline-replystream-${recId}`, onMessage);
 }
 
 export function openReplyStreamTab(recId, recLabel) {
-  const stream = _replyStreams[recId] || replyStreamInit(recId);
+  if (!_replyStreams[recId]) replyStreamInit(recId);
+  const stream = _replyStreams[recId];
   if (prefersInlineView()) return openInlineReplyStream(recId, recLabel);
-  const sig = randomToken();
-  const win = openLiveWindow(`replystream-${recId}`, buildReplyStreamHtml(recLabel, sig));
+  const win = openLiveWindow(`replystream-${recId}`, buildReplyStreamHtml(recLabel));
   if (!win) return canRenderInline() ? openInlineReplyStream(recId, recLabel) : null;
-  pumpToWindow(win, stream, 'replystream', sig, replyStreamSnapshot);
+  driveWindow(win, stream, 'replystream', replyStreamSnapshot,
+              canRenderInline() ? () => openInlineReplyStream(recId, recLabel) : null);
   return win;
 }
 
@@ -234,44 +211,96 @@ function openInlineReplyStream(recId, recLabel) {
   return openInlineLiveView({
     key:       `replystream-${recId}`,
     kind:      'replystream',
-    title:     `🧠 AI Reply - ${recLabel || 'Recording'}`,
-    accent:    '#4caf50',
+    title:     VIEW_TITLE.replystream(recLabel),
+    accent:    VIEW_ACCENT.replystream,
     subscribe: onMessage => subscribeReplyStream(recId, onMessage)
   });
 }
 
-function buildReplyStreamHtml(recLabel, sig) {
-  const title = escapeHtml(recLabel || 'Recording');
+function buildReplyStreamHtml(recLabel) {
+  const title = escapeHtml(VIEW_TITLE.replystream(recLabel));
   return liveDocument({
-    channel: 'replystream',
-    sig,
-    title: `🧠 AI Reply - ${title}`,
-    accent: '#4caf50',
+    title,
+    accent: VIEW_ACCENT.replystream,
     status: '⏳ Generating...',
     footer: 'Waiting for tokens...',
     styles: `
   #reply{flex:1;overflow-y:auto;padding:24px 28px;white-space:pre-wrap;word-break:break-word;line-height:1.8}
-  #cursor{display:inline-block;width:2px;height:1em;background:#4caf50;vertical-align:text-bottom;animation:blink .7s step-end infinite}
+  #cursor{display:inline-block;width:2px;height:1em;background:${VIEW_ACCENT.replystream};vertical-align:text-bottom;animation:blink .7s step-end infinite}
   @keyframes blink{50%{opacity:0}}`,
     body: `<div id="reply"><span id="text"></span><span id="cursor"></span></div>`
   });
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  3. Which view to open
- *
- *  A popup is a second window fed by THIS one: the fetch stream, the registry
- *  and the postMessage pump all live in the opener. On a phone that is a
- *  contradiction, because window.open() hands the foreground to the new tab and
- *  backgrounds the opener, where timers are throttled and the tab may be
- *  suspended entirely. The view on screen then waits forever on a window that is
- *  no longer running - the reported "opens a tab, sits on Generating" symptom.
- *
- *  Touch/small-screen contexts therefore render in-page, in this tab, where
- *  nothing is backgrounded and no cross-window access is involved. Desktop keeps
- *  the popup, which is genuinely better there: it survives navigation and can be
- *  parked on a second monitor.
- *  ────────────────────────────────────────────────────────────────────────── */
+export function replyStreamStats(recId) {
+  const entry = _replyStreams[recId];
+  if (!entry) return null;
+  return {
+    model:     entry.model || '',
+    count:     entry.count || 0,
+    elapsedMs: Math.max(0, (entry.lastAt || 0) - (entry.firstAt || 0))
+  };
+}
+
+function finishedReplyEntry({ text, model, tokenCount, elapsedMs }) {
+  const span = Math.max(0, Number(elapsedMs) || 0);
+  return {
+    tokens:  String(text || ''),
+    count:   Math.max(0, Number(tokenCount) || 0),
+    firstAt: span ? 1 : 0,
+    lastAt:  span ? span + 1 : 0,
+    model:   String(model || ''),
+    done:    true,
+    listeners: []
+  };
+}
+
+function finishedLogEntry({ text, charCount }) {
+  const body  = String(text || '');
+  const chars = Number.isFinite(charCount) ? charCount : body.length;
+  return {
+    parts: [{ text: body, startSec: 0, endSec: 0, hasSeg: true, final: true }],
+    meta: [`✅ Done - ${chars} chars total`],
+    listeners: []
+  };
+}
+
+function openSavedView({ key, windowName, kind, label, entry }) {
+  const snapshot = kind === 'replystream' ? replyStreamSnapshot : liveLogSnapshot;
+  const openInline = () => openInlineLiveView({
+    key,
+    kind,
+    title:  VIEW_TITLE[kind](label),
+    accent: VIEW_ACCENT[kind],
+    subscribe: onMessage => {
+      for (const msg of snapshot(entry)) onMessage(msg);
+      return () => {};
+    }
+  });
+
+  if (prefersInlineView()) return openInline();
+  const html = kind === 'replystream' ? buildReplyStreamHtml(label) : buildLiveLogHtml(label);
+  const win = openLiveWindow(windowName || key, html);
+  if (!win) return canRenderInline() ? openInline() : null;
+  try { win.focus(); } catch (_) {}
+  driveWindow(win, entry, kind, snapshot, canRenderInline() ? openInline : null);
+  return win;
+}
+
+export function openSavedReplyView({ key, windowName, label, text, model, tokenCount, elapsedMs }) {
+  return openSavedView({
+    key, windowName, kind: 'replystream', label,
+    entry: finishedReplyEntry({ text, model, tokenCount, elapsedMs })
+  });
+}
+
+export function openSavedTranscriptView({ key, windowName, label, text, charCount }) {
+  return openSavedView({
+    key, windowName, kind: 'livelog', label,
+    entry: finishedLogEntry({ text, charCount })
+  });
+}
+
 const INLINE_VIEW_QUERY = '(pointer: coarse), (max-width: 820px)';
 
 function canRenderInline() {
@@ -282,7 +311,6 @@ function canRenderInline() {
 
 function prefersInlineView() {
   if (!canRenderInline()) return false;
-  // A panel already on screen keeps the choice consistent for the next view.
   if (inlineLiveViewKey()) return true;
   try {
     if (typeof window.matchMedia !== 'function') return false;
@@ -292,32 +320,6 @@ function prefersInlineView() {
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  4. Shared pump + blob-URL lifecycle helpers
- *  ────────────────────────────────────────────────────────────────────────── */
-
-// Unguessable per-popup token. The popups post/receive over a wildcard target
-// origin (a blob: popup's origin is implementation-defined - sometimes opaque -
-// so a fixed targetOrigin can't be relied on), so instead each popup is handed a
-// fresh secret and accepts ONLY messages carrying it. Cheap defence against a
-// stray window injecting messages into the live views.
-function randomToken() {
-  const a = new Uint8Array(16);
-  (self.crypto || window.crypto).getRandomValues(a);
-  return Array.from(a, b => b.toString(16).padStart(2, '0')).join('');
-}
-
-// Forward a registry entry's future events to a popup window. Replaces any
-// listener already bound to the SAME window (reopening a live tab returns the
-// same named window, so this prevents listeners stacking up and posting
-// duplicates), and removes itself once the window is closed - so a registry
-// entry for an active recording can't accumulate dead listeners from repeated
-// opens before the LRU eviction would catch it.
-// Forward a registry entry's future events to a plain callback (the in-page
-// panel). Keyed rather than window-bound, so reopening the same view replaces
-// its subscription instead of stacking a second one, and the returned function
-// detaches it. Callback listeners carry no _win, so attachWindowListener's
-// window filtering never touches them.
 function attachCallbackListener(entry, key, onMessage) {
   entry.listeners = entry.listeners.filter(fn => fn._key !== key);
   const listener = (msg) => onMessage(msg);
@@ -326,149 +328,145 @@ function attachCallbackListener(entry, key, onMessage) {
   return () => { entry.listeners = entry.listeners.filter(fn => fn !== listener); };
 }
 
-function attachWindowListener(entry, win, channel, sig) {
+// A pop-up is a page with no script of its own. This tab renders into it with the same renderer as
+// the inline view, on the pop-up's own animation frames. Nothing is posted to it: its content cannot
+// reach a page the window was navigated to, and it never loads a module, which a service worker of a
+// newer build could otherwise have served it.
+function attachWindowRenderer(entry, win, doc, renderer) {
   entry.listeners = entry.listeners.filter(fn => fn._win !== win);
   const listener = (msg) => {
-    if (!win || win.closed) {
+    let showing = false;
+    try { showing = !win.closed && win.document === doc; } catch (_) {}
+    if (!showing) {
       entry.listeners = entry.listeners.filter(fn => fn !== listener);
       return;
     }
-    try { win.postMessage({ channel, sig, msg }, '*'); } catch (_) {}
+    try { renderer.handle(msg); } catch (err) { console.warn('Live view popup could not be updated:', err); }
   };
   listener._win = win;
   entry.listeners.push(listener);
 }
 
-/* One shared popup document. Structure and styling only: every line of script
-   lives in the external same-origin module referenced below, because a blob:
-   document inherits the opener's CSP and that policy forbids inline script.
-   Per-popup configuration travels on a data attribute for the same reason. */
-function liveDocument({ channel, sig, title, accent, status, footer, styles, body }) {
-  const config = JSON.stringify({ channel, sig });
+function liveDocument({ title, accent, status, footer, styles, body }) {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
   <title>${title}</title>
   <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0d0d0d;color:#e8e8e8;font:15px/1.8 system-ui,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden}
   #header{padding:10px 16px;background:#111;border-bottom:1px solid #222;flex-shrink:0}
   #title{font-size:13px;color:${accent};font-family:monospace;font-weight:bold}
-  #status{font-size:11px;color:#555;font-family:monospace;margin-top:2px}
-  #footer{padding:6px 16px;background:#111;border-top:1px solid #1a1a1a;font:11px/1.4 monospace;color:#444;flex-shrink:0}${styles}
+  #status{font-size:11px;color:${LIVE_VIEW_COLORS.status};font-family:monospace;margin-top:2px}
+  #footer{padding:6px 16px;background:${LIVE_VIEW_COLORS.chrome};border-top:1px solid #1a1a1a;font:11px/1.4 monospace;color:${LIVE_VIEW_COLORS.footer};flex-shrink:0}${styles}
   </style></head>
-  <body data-live-config="${escapeAttr(config)}">
+  <body>
   <div id="header">
   <div id="title">${title}</div>
   <div id="status">${status}</div>
   </div>
   ${body}
   <div id="footer">${footer}</div>
-  <script type="module" src="${escapeAttr(LIVE_VIEW_URL)}"><\/script>
   </body></html>`;
 }
 
-/* Open (or re-navigate) the named popup and free its blob URL once parsed. */
+const _liveWindows = new Map();
+
 function openLiveWindow(name, html) {
+  const existing = _liveWindows.get(name);
+  if (existing) {
+    try { if (!existing.closed) existing.close(); } catch (_) {}
+    _liveWindows.delete(name);
+  }
   const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
   const win = window.open(url, name);
-  if (!win) { URL.revokeObjectURL(url); return null; }   // popup blocked
+  if (win) _liveWindows.set(name, win);
+  if (!win) { URL.revokeObjectURL(url); return null; }
   try { win.addEventListener('load', () => { try { URL.revokeObjectURL(url); } catch (_) {} }); } catch (_) {}
   setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) {} }, 60000);
   return win;
 }
 
-/* Popups awaiting their handshake: sig -> { win, attach }.
-   The popup announces itself by postMessage, which is the only channel that
-   works in both directions regardless of what origin the browser decided to
-   give a blob: document. */
-const _pendingReady = new Map();
-let _readyListenerBound = false;
-
-function ensureReadyListener() {
-  if (_readyListenerBound) return;
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
-  _readyListenerBound = true;
-  window.addEventListener('message', event => {
-    const data = event && event.data;
-    if (!data || data.liveReady !== true || typeof data.sig !== 'string') return;
-    const pending = _pendingReady.get(data.sig);
-    // The popup announces more than once; attach() is idempotent.
-    if (pending) pending.attach();
-  });
+// The elements of the pop-up's page once it has been parsed; null while the window still shows the
+// blank page window.open starts it with. Reading the document throws once the window shows a page
+// of another origin.
+function popupElements(win, kind) {
+  const doc = win.document;
+  const statusEl = doc.getElementById('status');
+  const footerEl = doc.getElementById('footer');
+  if (!statusEl || !footerEl) return null;
+  if (kind === 'livelog') {
+    const transcriptEl = doc.getElementById('transcript');
+    return transcriptEl ? { doc, transcriptEl, statusEl, footerEl } : null;
+  }
+  const replyEl = doc.getElementById('reply');
+  const textEl = doc.getElementById('text');
+  return replyEl && textEl ? { doc, replyEl, textEl, cursorEl: doc.getElementById('cursor'), statusEl, footerEl } : null;
 }
 
-/* Wait for the popup's module to report readiness, replay everything already in
-   the registry, then forward future events.
+// The pop-up's own frames, so it keeps up while this tab is in the background; a timer covers a
+// pop-up that gets no frames, such as one behind the app.
+function popupFrame(win) {
+  return fn => {
+    let done = false;
+    const runOnce = () => { if (done) return; done = true; fn(); };
+    try { win.requestAnimationFrame(runOnce); } catch (_) {}
+    setTimeout(runOnce, FRAME_FALLBACK_MS);
+  };
+}
 
-   Readiness arrives EITHER as a message from the popup or as the _ready flag
-   seen by the bounded poll below. The message is what actually works on WebKit,
-   where reading a property off a blob: popup can throw SecurityError; the poll
-   remains for a popup whose opener reference was stripped, and it is what makes
-   the wait bounded.
+function rendererFor(win, kind, elements) {
+  const frame = popupFrame(win);
+  const { transcriptEl, replyEl, textEl, cursorEl, statusEl, footerEl } = elements;
+  return kind === 'livelog'
+    ? createLiveLogRenderer({ transcriptEl, statusEl, footerEl, frame })
+    : createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, footerEl, frame });
+}
 
-   The wait is BOUNDED. When a popup cannot boot at all - the exact failure the
-   inherited-CSP bug produced - the opener writes a visible explanation into the
-   window instead of polling silently forever behind a convincing
-   "Generating..." placeholder. */
-function pumpToWindow(win, entry, channel, sig, snapshot) {
-  ensureReadyListener();
+const _driving = new WeakMap();
+
+function driveWindow(win, entry, kind, snapshot, openInstead = null) {
   const deadline = Date.now() + READY_TIMEOUT_MS;
-  let settled = false;
-
-  const attach = () => {
-    if (settled) return;
-    settled = true;
-    _pendingReady.delete(sig);
+  const drive = {};
+  _driving.set(win, drive);
+  const start = () => {
+    if (_driving.get(win) !== drive) return;
+    let elements = null;
     try {
-      if (win.closed) return;
-      for (const msg of snapshot(entry)) win.postMessage({ channel, sig, msg }, '*');
-      attachWindowListener(entry, win, channel, sig);
-    } catch (_) {}
-  };
-  _pendingReady.set(sig, { win, attach });
-
-  const pump = () => {
-    if (settled) return;
-    try {
-      if (win.closed) return;
-      if (win._ready) {
-        attach();
-        return;
-      }
-      if (Date.now() >= deadline) { reportPopupFailure(win); return; }
+      if (win.closed) { _driving.delete(win); return; }
+      elements = popupElements(win, kind);
     } catch (_) {
-      // Cross-origin property read: this window may not touch a blob: popup that
-      // WebKit gave a different origin. The popup is probably alive and will
-      // announce itself by message, so only the POLL gives up here - its pending
-      // handshake stays registered.
-      if (Date.now() >= deadline) return;
+      // This tab may not read the pop-up's page: a browser that gives it an origin of its own. Nothing
+      // is sent to it; the view opens in the page instead, where the page can show one.
+      _driving.delete(win);
+      if (openInstead) {
+        try { win.close(); } catch (_) {}
+        openInstead();
+      }
+      return;
     }
-    setTimeout(pump, READY_POLL_MS);
+    if (!elements) {
+      if (Date.now() >= deadline) { _driving.delete(win); reportPopupFailure(win); return; }
+      setTimeout(start, READY_POLL_MS);
+      return;
+    }
+    _driving.delete(win);
+    const renderer = rendererFor(win, kind, elements);
+    for (const msg of snapshot(entry)) renderer.handle(msg);
+    attachWindowRenderer(entry, win, elements.doc, renderer);
   };
-  pump();
+  start();
 }
 
 function reportPopupFailure(win) {
-  // Nothing may attach to a window already declared dead.
-  for (const [key, pending] of _pendingReady) {
-    if (pending.win === win) _pendingReady.delete(key);
-  }
-  const message = 'This view could not start. Its script was blocked or failed to load, '
-                + 'so no live output can be shown here. Close this window and check the '
-                + 'browser console in the main tab.';
+  const message = 'This view could not be shown: its page did not load. Close this window and open '
+                + 'the view again from the main tab.';
   try {
-    const status = win.document.getElementById('status');
-    const footer = win.document.getElementById('footer');
-    if (status) status.textContent = '⚠️ View failed to start';
-    if (footer) footer.textContent = message;
+    const body = win.document && win.document.body;
+    if (body) body.textContent = message;
   } catch (_) {}
-  console.error('Live view popup never became ready:', message);
+  console.error('Live view popup never loaded:', message);
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  5. Live-status bar - a clickable progress indicator injected into the
- *  recording's panel, visible even in compact mode. Optional ✕ cancels the job.
- *  Shared by gui.js (manual) and auto-pipeline.js (automatic).
- *  ────────────────────────────────────────────────────────────────────────── */
 export function showLiveStatus(recId, type, initialText, onClick, onCancel) {
   const container = document.getElementById(`rec-${recId}`);
   if (!container) return null;
@@ -487,9 +485,6 @@ export function showLiveStatus(recId, type, initialText, onClick, onCancel) {
   main.innerHTML = `<span class="dot"></span><span class="live-status-text"></span>`;
   main.querySelector('.live-status-text').textContent = initialText;
   if (onClick) {
-    // "Tap to watch" was pointer-only: a plain div with a click listener is not
-    // reachable by keyboard or exposed to assistive technology, so the live view
-    // was unopenable without a pointer.
     main.setAttribute('role', 'button');
     main.setAttribute('tabindex', '0');
     main.setAttribute('aria-label', `Open the live ${type} view`);

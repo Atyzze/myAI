@@ -1,32 +1,8 @@
-/* ==========================================================================
- *  live-render.js - Rendering for the live transcript log and the reply token
- *                   stream, independent of WHERE it is rendered.
- *
- *  WHY THIS FILE EXISTS
- *  The renderers used to live inside live-view.js, the popup-only module. That
- *  made the popup the only possible live view, which is a problem on mobile:
- *  window.open() there hands the foreground to the new tab and backgrounds the
- *  opener, and the opener is the tab holding the fetch stream and posting the
- *  tokens across. The window that just took the screen is fed by a window the
- *  OS just throttled, so it renders nothing and sits on "Generating..." forever.
- *
- *  The fix is an in-page panel (live-inline.js) that subscribes to the same
- *  registry directly, with no second window and no postMessage hop. Both views
- *  must render identically, so the rendering lives here, takes its target
- *  elements as arguments, and knows nothing about popups, messages or origins.
- *
- *  Both factories return { handle(msg) }, accepting exactly the message shapes
- *  the registries in live-tabs.js emit:
- *    livelog:     { type:'meta', line } | { type:'text', chunkIndex, text,
- *                  startSec, endSec, hasSeg } | { type:'reset' }
- *    replystream: { type:'token', token } | { type:'done' } | { type:'reset' }
- *  ========================================================================== */
 import { seamTrim } from './dedup.js';
 
 const TAIL_WORDS = 40;
+const TIMESTAMP_PREFIX = /^(\[[\d:]+\s*[\u2013-]\s*[\d:]+\])\s+/;
 
-/* Follow the tail only when the reader is already at the tail. Scrolling up to
-   re-read something must not be undone by the next token. */
 const AUTOSCROLL_SLACK_PX = 80;
 
 function fmtTime(sec) {
@@ -52,67 +28,140 @@ function atBottom(el) {
     return (el.scrollHeight - el.scrollTop - el.clientHeight) < AUTOSCROLL_SLACK_PX;
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Live transcript log
- *  ────────────────────────────────────────────────────────────────────────── */
-export function createLiveLogRenderer({ transcriptEl, statusEl, footerEl }) {
-    const chunks = {};
+const FRAME_FALLBACK_TIMER_MS = 100;
 
-    function pushBlock(tsPart, textPart) {
-        const block = document.createElement('div');
-        block.className = 'chunk-block';
+function oncePerFrameScheduler(frame) {
+    if (typeof frame === 'function') return frame;
+    const runImmediately = fn => fn();
+    if (typeof requestAnimationFrame !== 'function') return runImmediately;
+    return fn => {
+        let done = false;
+        const runOnce = () => { if (done) return; done = true; fn(); };
+        requestAnimationFrame(runOnce);
+        setTimeout(runOnce, FRAME_FALLBACK_TIMER_MS);
+    };
+}
+
+function tailAfter(tail, added) {
+    const words = (tail + ' ' + added).trim().split(/\s+/).filter(Boolean);
+    return words.slice(-TAIL_WORDS).join(' ');
+}
+
+export function createLiveLogRenderer({ transcriptEl, statusEl, footerEl, frame = null }) {
+    const chunks = new Map();
+    const views = new Map();
+    let order = [];
+    const schedule = oncePerFrameScheduler(frame);
+    let stickPending = false;
+    let follow = false;
+
+    const doc = () => transcriptEl.ownerDocument || document;
+
+    function block(tsPart, textPart) {
+        const node = doc().createElement('div');
+        node.className = 'chunk-block';
         if (tsPart) {
-            const ts = document.createElement('span');
+            const ts = doc().createElement('span');
             ts.className = 'ts';
             ts.textContent = tsPart;
-            block.appendChild(ts);
-            block.appendChild(document.createTextNode(' '));
+            node.appendChild(ts);
+            node.appendChild(doc().createTextNode(' '));
         }
-        block.appendChild(document.createTextNode(textPart));
-        transcriptEl.appendChild(block);
+        node.appendChild(doc().createTextNode(textPart));
+        return node;
     }
 
-    function rebuildTranscript() {
-        const ordered = Object.values(chunks).sort((a, b) => a.startSec - b.startSec);
-        transcriptEl.textContent = '';
-        let tail = '';
-
-        const updTail = added => {
-            const words = (tail + ' ' + added).trim().split(/\s+/).filter(Boolean);
-            tail = words.slice(-TAIL_WORDS).join(' ');
-        };
-
-        ordered.forEach((chunk, i) => {
-            if (i > 0) {
-                const sep = document.createElement('div');
-                sep.className = 'chunk-sep';
-                transcriptEl.appendChild(sep);
+    function renderChunk(chunk, tailBefore, first) {
+        const nodes = [];
+        if (!first) {
+            const sep = doc().createElement('div');
+            sep.className = 'chunk-sep';
+            nodes.push(sep);
+        }
+        let tail = tailBefore;
+        const text = chunk.text || '';
+        if (chunk.hasSeg) {
+            for (const line of text.split('\n')) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                const stamp = TIMESTAMP_PREFIX.exec(trimmed);
+                const tsPart   = stamp ? stamp[1] : '';
+                const textPart = stamp ? trimmed.slice(stamp[0].length) : trimmed;
+                if (!textPart) continue;
+                const kept = (chunk.final || !tail) ? textPart : seamTrim(tail, textPart);
+                if (!kept.trim()) continue;
+                tail = tailAfter(tail, kept);
+                nodes.push(block(tsPart, kept));
             }
-            const text = chunk.text || '';
-
-            // Use the explicit flag from the pipeline. The old heuristic sniffed
-            // for a leading "[0…"/"[1…" and silently broke past 20 minutes, where
-            // real timestamps look like [21:34] and start with neither.
-            if (chunk.hasSeg) {
-                for (const line of text.split('\n')) {
-                    const trimmed = line.trim();
-                    if (!trimmed) continue;
-                    const bracketEnd = trimmed.indexOf('] ');
-                    const textPart = bracketEnd >= 0 ? trimmed.substring(bracketEnd + 2) : trimmed;
-                    const tsPart   = bracketEnd >= 0 ? trimmed.substring(0, bracketEnd + 1) : '';
-                    if (!textPart) continue;
-                    const kept = tail ? seamTrim(tail, textPart) : textPart;
-                    if (!kept.trim()) continue;
-                    updTail(kept);
-                    pushBlock(tsPart, kept);
-                }
-            } else {
-                const kept = tail ? seamTrim(tail, text) : text;
-                if (!kept.trim()) return;
-                updTail(kept);
-                pushBlock(`[${fmtTime(chunk.startSec)} \u2013 ${fmtTime(chunk.endSec)}]`, kept);
+        } else {
+            const kept = tail ? seamTrim(tail, text) : text;
+            if (kept.trim()) {
+                tail = tailAfter(tail, kept);
+                nodes.push(block(`[${fmtTime(chunk.startSec)} – ${fmtTime(chunk.endSec)}]`, kept));
             }
+        }
+        return { nodes, tail };
+    }
+
+    const detach = node => {
+        if (typeof node.remove === 'function') node.remove();
+        else if (node.parentNode && typeof node.parentNode.removeChild === 'function') node.parentNode.removeChild(node);
+    };
+    const insert = (node, anchor) => (anchor ? transcriptEl.insertBefore(node, anchor) : transcriptEl.appendChild(node));
+
+    function firstNodeFrom(position) {
+        for (let i = position; i < order.length; i++) {
+            const view = views.get(order[i]);
+            if (view && view.nodes.length) return view.nodes[0];
+        }
+        return null;
+    }
+
+    function place(key) {
+        const chunk = chunks.get(key);
+        const at = order.findIndex(other => {
+            const c = chunks.get(other);
+            return c.startSec > chunk.startSec || (c.startSec === chunk.startSec && other > key);
         });
+        if (at < 0) order.push(key); else order.splice(at, 0, key);
+    }
+
+    function rerenderFrom(position) {
+        for (let i = position; i < order.length; i++) {
+            const key = order[i];
+            const before = i > 0 ? views.get(order[i - 1]).tail : '';
+            const old = views.get(key);
+            const next = renderChunk(chunks.get(key), before, i === 0);
+            const anchor = firstNodeFrom(i + 1);
+            if (old) for (const node of old.nodes) detach(node);
+            for (const node of next.nodes) insert(node, anchor);
+            views.set(key, next);
+            const laterChunksUnaffected = i > position && old && old.tail === next.tail;
+            if (laterChunksUnaffected) break;
+        }
+    }
+
+    function rerenderAll() {
+        for (const view of views.values()) for (const node of view.nodes) detach(node);
+        views.clear();
+        rerenderFrom(0);
+    }
+
+    function stickSoon() {
+        if (stickPending) return;
+        stickPending = true;
+        follow = atBottom(transcriptEl);
+        schedule(() => {
+            stickPending = false;
+            stickToBottom(transcriptEl, follow);
+        });
+    }
+
+    function clear() {
+        chunks.clear();
+        views.clear();
+        order = [];
+        transcriptEl.textContent = '';
     }
 
     return {
@@ -122,19 +171,29 @@ export function createLiveLogRenderer({ transcriptEl, statusEl, footerEl }) {
                 setText(footerEl, line);
                 if (line.includes('✅') && line.includes('Done')) setText(statusEl, '✅ Complete');
             } else if (msg.type === 'text') {
-                chunks[msg.chunkIndex] = {
-                    startSec: msg.startSec ?? (msg.chunkIndex * 60),
-                    endSec:   msg.endSec   ?? (msg.chunkIndex * 60 + 60),
+                const key = Number(msg.chunkIndex);
+                const known = chunks.has(key);
+                const previous = known ? chunks.get(key) : null;
+                const chunk = {
+                    startSec: msg.startSec ?? (key * 60),
+                    endSec:   msg.endSec   ?? (key * 60 + 60),
                     text:     msg.text,
-                    hasSeg:   !!msg.hasSeg
+                    hasSeg:   !!msg.hasSeg,
+                    final:    !!msg.final
                 };
-                const follow = atBottom(transcriptEl);
-                rebuildTranscript();
-                stickToBottom(transcriptEl, follow);
-                setText(statusEl, `${Object.keys(chunks).length} chunk(s) received - assembling timeline...`);
+                stickSoon();
+                chunks.set(key, chunk);
+                if (known && previous.startSec !== chunk.startSec) {
+                    order = order.filter(other => other !== key);
+                    place(key);
+                    rerenderAll();
+                } else {
+                    if (!known) place(key);
+                    rerenderFrom(order.indexOf(key));
+                }
+                setText(statusEl, `${chunks.size} chunk(s) received - assembling timeline...`);
             } else if (msg.type === 'reset') {
-                for (const key of Object.keys(chunks)) delete chunks[key];
-                rebuildTranscript();
+                clear();
                 setText(statusEl, '⏳ Processing...');
                 setText(footerEl, 'Restarted...');
             }
@@ -142,19 +201,18 @@ export function createLiveLogRenderer({ transcriptEl, statusEl, footerEl }) {
     };
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- *  Reply token stream
- *  ────────────────────────────────────────────────────────────────────────── */
-export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, footerEl }) {
+const REPLY_TEXT_NODE_MAX_CHARS = 4096;
+
+export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, footerEl, frame = null }) {
     let charCount = 0;
     let tokenCount = 0;
     let elapsedMs = 0;
     let model = '';
+    let gatheredTokens = '';
+    let writeScheduled = false;
+    let generation = 0;
+    const schedule = oncePerFrameScheduler(frame);
 
-    /* Counters, not clocks: the numbers arrive with the tokens because only the
-       registry sees every one of them (a view opened late is handed the whole
-       buffer as a single message). The rate is omitted rather than shown as an
-       absurd figure until there is a measurable interval to divide by. */
     const rate = () => {
         if (tokenCount < 2 || elapsedMs <= 0) return null;
         return (tokenCount / (elapsedMs / 1000));
@@ -168,8 +226,6 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
         return parts.join(' · ');
     };
 
-    // The model name replaces the trailing ellipsis rather than following it:
-    // "Generating - gemma4:e4b" reads better than "Generating... - gemma4:e4b".
     const generatingLabel = () => (model ? `⏳ Generating - ${model}` : '⏳ Generating...');
     const streamingLabel  = () => (model ? `⚡ Streaming - ${model}`  : '⚡ Streaming...');
     const completeLabel   = () => {
@@ -177,27 +233,55 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
         return model ? `${base} - ${model}` : base;
     };
 
+    function appendToGrowingTextNode(text) {
+        const last = textEl.lastChild;
+        if (last && last.nodeType === 3 && typeof last.appendData === 'function' && last.length < REPLY_TEXT_NODE_MAX_CHARS) {
+            last.appendData(text);
+        } else {
+            textEl.appendChild((textEl.ownerDocument || document).createTextNode(text));
+        }
+    }
+
+    function writeGatheredTokens() {
+        writeScheduled = false;
+        if (!gatheredTokens) return;
+        const follow = atBottom(replyEl);
+        appendToGrowingTextNode(gatheredTokens);
+        gatheredTokens = '';
+        setText(footerEl, progressLine());
+        stickToBottom(replyEl, follow);
+    }
+
+    function writeGatheredTokensOnNextFrame() {
+        if (writeScheduled) return;
+        writeScheduled = true;
+        const scheduledFor = generation;
+        schedule(() => { if (scheduledFor === generation) writeGatheredTokens(); });
+    }
+
     return {
         handle(msg) {
             if (msg.type === 'token') {
                 const token = String(msg.token ?? '');
-                const follow = atBottom(replyEl);
-                textEl.textContent += token;
+                const wasEmpty = charCount === 0;
+                gatheredTokens += token;
                 charCount += token.length;
+                if (wasEmpty && token.length) setText(statusEl, streamingLabel());
                 if (Number.isFinite(msg.count))     tokenCount = msg.count;
                 if (Number.isFinite(msg.elapsedMs)) elapsedMs  = msg.elapsedMs;
-                setText(footerEl, progressLine());
-                stickToBottom(replyEl, follow);
+                writeGatheredTokensOnNextFrame();
             } else if (msg.type === 'model') {
                 model = String(msg.model ?? '');
                 setText(statusEl, charCount ? streamingLabel() : generatingLabel());
             } else if (msg.type === 'done') {
+                writeGatheredTokens();
                 if (cursorEl) cursorEl.style.display = 'none';
                 setText(statusEl, completeLabel());
                 setText(footerEl, progressLine());
             } else if (msg.type === 'reset') {
-                // The same recording started a NEW reply while this view was open.
-                // Clear the old answer instead of appending the new one to it.
+                generation++;
+                gatheredTokens = '';
+                writeScheduled = false;
                 textEl.textContent = '';
                 charCount = 0;
                 tokenCount = 0;

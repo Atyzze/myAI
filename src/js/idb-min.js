@@ -1,24 +1,3 @@
-/* ==========================================================================
-   idb-min.js - Tiny hand-written promise wrapper around the native IndexedDB
-   API. NOT a third-party library: written for this app to remove the vendored
-   `idb` dependency (and its supply-chain surface) entirely.
-
-   It implements only the surface this codebase uses:
-     openDB(name, version, { upgrade })          -> Promise<DB>
-     db.get / put / add / delete / clear (store, …)
-     db.getAllFromIndex(store, index, query)
-     db.transaction(store, mode) -> { store, done }
-       store.get / put / add (…)
-       store.index(name).openCursor(query) / getAll(query)
-       store.openCursor(query)
-       cursor.value / .key / .delete() / .continue()
-
-   Writes resolve only after the transaction COMMITS (await tx.done), so a
-   resolved write is durable - matching the guarantees the rest of the app
-   assumes from the previous idb wrapper.
-   ========================================================================== */
-
-// Promisify a single IDBRequest.
 function pReq(req) {
     return new Promise((resolve, reject) => {
         req.onsuccess = () => resolve(req.result);
@@ -26,8 +5,6 @@ function pReq(req) {
     });
 }
 
-// Promisify transaction completion. Handlers are attached eagerly (at wrap
-// time) so the promise can never miss an already-fired 'complete' event.
 function pTx(tx) {
     return new Promise((resolve, reject) => {
         tx.oncomplete = () => resolve();
@@ -36,9 +13,6 @@ function pTx(tx) {
     });
 }
 
-// Wrap a cursor request so .continue()/.advance() yield a promise for the next
-// cursor, and .delete() returns a promise. Re-arming onsuccess on the same
-// request is how native IDB cursor iteration works.
 function wrapCursorRequest(req) {
     return pReq(req).then(function step(cursor) {
         if (!cursor) return null;
@@ -48,8 +22,6 @@ function wrapCursorRequest(req) {
             get primaryKey() { return cursor.primaryKey; },
             delete()    { return pReq(cursor.delete()); },
             continue()  { cursor.continue(); return pReq(req).then(step); },
-            // Skip n records in one hop (n must be >= 1 per the IDB spec) - lets
-            // the paginator jump to a page offset without visiting every row.
             advance(n)  { cursor.advance(n); return pReq(req).then(step); }
         };
     });
@@ -59,6 +31,7 @@ function wrapStore(store) {
     return {
         get:        (key)   => pReq(store.get(key)),
         getAll:     (query) => pReq(store.getAll(query)),
+        getAllKeys: (query) => pReq(store.getAllKeys(query)),
         count:      (query) => pReq(store.count(query)),
         put:        (value) => pReq(store.put(value)),
         add:        (value) => pReq(store.add(value)),
@@ -72,10 +45,6 @@ function wrapStore(store) {
                 getAll:     (query) => pReq(ix.getAll(query)),
                 count:      (query) => pReq(ix.count(query)),
                 openCursor: (query, direction) => wrapCursorRequest(ix.openCursor(query, direction)),
-                // Key-only cursor: yields .key/.primaryKey without deserializing the
-                // record VALUE (used to enumerate distinct index keys cheaply). The
-                // returned wrapper's .value is undefined here and .delete() is not
-                // valid on a key cursor, so callers use only .key/.primaryKey.
                 openKeyCursor: (query, direction) => wrapCursorRequest(ix.openKeyCursor(query, direction))
             };
         }
@@ -89,16 +58,26 @@ function wrapDb(idb) {
 
         transaction(storeName, mode = 'readonly') {
             const tx   = idb.transaction(storeName, mode);
-            const done = pTx(tx);                 // attach handlers now (eager)
+            const done = pTx(tx);
             return { store: wrapStore(tx.objectStore(storeName)), done, tx };
         },
 
-        // ── Convenience single-op helpers (each in its own transaction) ──
+        transactionOver(storeNames, mode = 'readonly') {
+            const tx     = idb.transaction(storeNames, mode);
+            const done   = pTx(tx);
+            const stores = {};
+            for (const name of storeNames) stores[name] = wrapStore(tx.objectStore(name));
+            return { stores, done, tx };
+        },
+
         get(storeName, key) {
             return pReq(idb.transaction(storeName, 'readonly').objectStore(storeName).get(key));
         },
         getAll(storeName, query) {
             return pReq(idb.transaction(storeName, 'readonly').objectStore(storeName).getAll(query));
+        },
+        getAllKeys(storeName, query) {
+            return pReq(idb.transaction(storeName, 'readonly').objectStore(storeName).getAllKeys(query));
         },
         getAllFromIndex(storeName, indexName, query) {
             return pReq(idb.transaction(storeName, 'readonly')
@@ -130,35 +109,39 @@ function wrapDb(idb) {
     return wrapper;
 }
 
-/**
- * Open (and upgrade) a database. `upgrade(db, oldVersion, newVersion)` runs
- * against the NATIVE IDBDatabase inside the versionchange transaction, so it
- * can call db.createObjectStore(...).createIndex(...) directly.
- */
-export function openDB(name, version, { upgrade } = {}) {
+export function openDB(name, version, {
+    upgrade, canClose = () => true, onClosed = () => {}, onBlocked = () => {}
+} = {}) {
     return new Promise((resolve, reject) => {
         const req = indexedDB.open(name, version);
         req.onupgradeneeded = (event) => {
             try { if (upgrade) upgrade(req.result, event.oldVersion, event.newVersion, req.transaction); }
-            catch (err) { reject(err); }
+            catch (err) {
+                try { req.transaction.abort(); } catch (_) {}
+                reject(err);
+            }
         };
         req.onsuccess = () => {
             const idb = req.result;
-            // If ANOTHER tab later opens this DB at a higher version, it can't
-            // upgrade while we hold the connection open - which would hang that
-            // tab's open (and thus its whole UI) indefinitely. Close ours so the
-            // upgrade can proceed. (Our own further DB calls will then fail loudly
-            // rather than deadlocking a second tab silently.)
-            idb.onversionchange = () => { try { idb.close(); } catch (_) {} };
+            idb.onversionchange = () => {
+                let mayClose = true;
+                try { mayClose = canClose() !== false; } catch (_) { mayClose = true; }
+                const release = () => {
+                    try { idb.close(); } catch (_) {}
+                    try { onClosed(); } catch (_) {}
+                };
+                if (!mayClose) {
+                    try { onBlocked({ holding: true, release }); } catch (_) {}
+                    return;
+                }
+                release();
+            };
             resolve(wrapDb(idb));
         };
         req.onerror   = () => reject(req.error);
-        // Another tab still holds an OLDER version open, blocking our upgrade.
-        // The open proceeds once it closes (that tab's onversionchange closes it);
-        // surface a warning so a genuinely stuck state is diagnosable.
         req.onblocked = () => {
-            console.warn(`IndexedDB "${name}" upgrade is blocked by another open tab. ` +
-                         `Close other tabs of this app if it does not continue.`);
+            console.warn(`IndexedDB "${name}" upgrade is blocked by another open tab.`);
+            try { onBlocked({ holding: false }); } catch (_) {}
         };
     });
 }

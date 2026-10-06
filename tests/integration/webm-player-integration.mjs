@@ -1,8 +1,3 @@
-/* Optional desktop-container integration test.
- * Uses ffmpeg/ffprobe when present to create a live-style WebM with unknown
- * duration, remux it through the browser module, verify finite duration and
- * seeking, and confirm decoded audio is bit-identical.
- */
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -78,9 +73,6 @@ try {
     ok(meta.finiteSegment, 'Segment has a finite encoded size');
     ok(meta.cueCount > 0, 'file contains a Cue index');
 
-    // Exercise the same bounded Cluster-window path used by long Opus
-    // transcription. The extracted container must be finite, timestamp-rebased,
-    // and independently decodable by a desktop demuxer.
     const prepared = await prepareWebmChunkSource(sourceBlob, 3250);
     const decodeWindow = await makeWebmDecodeChunk(prepared, 1.0, 2.5);
     fs.writeFileSync(chunkPath, new Uint8Array(await decodeWindow.blob.arrayBuffer()));

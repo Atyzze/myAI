@@ -1,44 +1,12 @@
-/* ==========================================================================
- *  live-inline.js - The SAME live views as the popups, rendered inside this
- *                   tab instead of a second window.
- *
- *  WHY THIS FILE EXISTS
- *  The popup live views cannot work on a phone, and the reason is structural
- *  rather than a bug that can be patched in place:
- *
- *    1. The popup holds no data. Every token reaches it by postMessage from the
- *       opener, which is the tab running the fetch stream.
- *    2. On mobile, window.open() gives the new tab the foreground and pushes the
- *       opener into the background, where timers are throttled and the tab can
- *       be suspended outright. The window on screen is therefore fed by a window
- *       the system just stopped running.
- *    3. The readiness handshake compounded it: the opener polled a property ON
- *       the popup (win._ready), and WebKit hands some blob: popups an origin the
- *       opener may not touch, so that read throws and the handshake gave up
- *       silently while the popup still showed its "Generating..." placeholder.
- *
- *  An in-page panel removes all three: one tab, no cross-window property access,
- *  no postMessage hop, nothing to background. It subscribes to the live registry
- *  through the callback handed in by live-tabs.js and renders with the shared
- *  renderers, so the popup and the panel show exactly the same thing.
- *
- *  Presentation only lives here. The panel never touches the network, the job
- *  registry or IndexedDB: closing it cancels nothing, exactly like closing the
- *  popup, because the work belongs to the recording and not to the view.
- *  ========================================================================== */
 import { createLiveLogRenderer, createReplyRenderer } from './live-render.js';
 
 const OVERLAY_ID = 'liveInlineOverlay';
 
-/* One panel at a time. Opening a different live view replaces the current one,
-   which matches the popup behaviour (a named window is re-navigated, not
-   duplicated) and keeps exactly one registry subscription alive. */
-let _open = null;   // { key, unsubscribe, overlay, returnFocus, onKeyDown }
+let _open = null;
 
 function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
-    // textContent, never innerHTML: recording titles are user-influenced.
     if (text !== undefined) node.textContent = text;
     return node;
 }
@@ -73,7 +41,6 @@ function buildOverlay() {
     document.body.appendChild(overlay);
 
     close.addEventListener('click', () => closeInlineLiveView());
-    // Tapping the backdrop closes; tapping inside the panel must not.
     overlay.addEventListener('click', event => {
         if (event.target === overlay) closeInlineLiveView();
     });
@@ -99,19 +66,6 @@ function clear(node) {
     if (node) node.textContent = '';
 }
 
-/**
- * Show a live view inside this document.
- *
- * @param {object}   view
- * @param {string}   view.key        Identity of the view, e.g. `replystream-12`.
- * @param {string}   view.kind       'replystream' | 'livelog'
- * @param {string}   view.title      Plain text; rendered with textContent.
- * @param {string}   view.accent     CSS colour for the title and cursor.
- * @param {Function} view.subscribe  fn(onMessage) => unsubscribe. Must replay
- *                                   everything already buffered before it
- *                                   returns, exactly like the popup handshake.
- * @returns {{key: string, close: Function}} handle for the caller.
- */
 export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
     if (_open && _open.key === key) return _open.handle;
     if (_open) closeInlineLiveView();
@@ -147,14 +101,24 @@ export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
         });
     }
 
-    // A throwing renderer must not tear the subscription down mid-stream: the
-    // registry would keep a listener that always fails. Contain it per message.
     const onMessage = msg => {
         try { renderer.handle(msg); } catch (error) { console.error('Live view render failed:', error); }
     };
 
+    const focusableIn = root => [...root.querySelectorAll(
+        'button:not(:disabled), select:not(:disabled), textarea:not(:disabled), input:not(:disabled), [href], [tabindex]:not([tabindex="-1"])'
+    )].filter(node => !node.hidden && node.offsetParent !== null);
+
     const onKeyDown = event => {
-        if (event.key === 'Escape' || event.key === 'Esc') closeInlineLiveView();
+        if (event.key === 'Escape' || event.key === 'Esc') { closeInlineLiveView(); return; }
+        if (event.key !== 'Tab') return;
+        const focusable = focusableIn(panel);
+        if (!focusable.length) { event.preventDefault(); panel.focus(); return; }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        else if (!panel.contains(document.activeElement)) { event.preventDefault(); first.focus(); }
     };
     document.addEventListener('keydown', onKeyDown);
 
@@ -162,8 +126,6 @@ export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
     overlay.setAttribute('aria-hidden', 'false');
     try { panel.focus(); } catch (_) {}
 
-    // subscribe() replays the buffer synchronously, so the panel is fully
-    // populated before this function returns even for a stream already running.
     const unsubscribe = subscribe(onMessage);
 
     const handle = { key, close: () => closeInlineLiveView() };
@@ -171,7 +133,6 @@ export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
     return handle;
 }
 
-/** Close the panel, if one is open. Safe to call at any time. */
 export function closeInlineLiveView() {
     const current = _open;
     if (!current) return false;
@@ -185,7 +146,6 @@ export function closeInlineLiveView() {
     return true;
 }
 
-/** Which view is on screen, or null. Used by live-tabs.js to avoid reopening. */
 export function inlineLiveViewKey() {
     return _open ? _open.key : null;
 }

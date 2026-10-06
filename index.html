@@ -3,11 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="myai-build" content="134">
 
-<!-- Content-Security-Policy for the server-only client. The browser loads no
-     third-party scripts or model files. blob: remains limited to workers/media
-     created by the recorder. Send frame-ancestors or X-Frame-Options as an HTTP
-     header at the reverse proxy; frame-ancestors is ignored in a meta CSP. -->
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
   script-src 'self' blob:;
@@ -31,15 +28,14 @@
 <link rel="apple-touch-icon" href="assets/icon-192.png" />
 
 <style>
-/* ─────────────── RESET & BASE ─────────────── */
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
 body{background:#000;color:#fff;font:16px/1.5 system-ui,sans-serif;text-align:center;padding:2em 1em 200px}
+@media (max-width:420px) {body{padding:3.2em .6em 200px}}
 button{cursor:pointer;border:0;border-radius:0;background:#000;color:#fff;transition:background .2s,border-color .2s}
 button:hover:not(:disabled){background:#333}
 button:disabled{opacity:.5;cursor:not-allowed}
 
-/* ─────────────── RECORD LIST ─────────────── */
 .rec-list{list-style:none;margin:0 auto;padding:0;max-width:820px}
 .rec-item{display:flex;flex-direction:column;gap:10px;padding:16px 16px;border:1px solid #2b2b33;border-radius:14px;margin-bottom:12px;text-align:left;}
 .rec-item:nth-child(odd){background:#0c0c10;border-color:#2b2b33}
@@ -52,10 +48,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .fmt-convert:hover{background:#1e1608;border-color:#8a7430}
 .fmt-convert:disabled{opacity:.75;cursor:progress}
 
-/* Custom audio player (seek bar scaled to the recording's known duration, so it
-   works for Opus/WebM whose native duration reads as Infinity) */
 .rec-player{width:100%}
-.player{display:flex;align-items:center;gap:12px;background:#0a0a0d;border:1px solid #2a2a33;border-radius:12px;padding:8px 12px}
+.player{display:flex;flex-direction:column;gap:8px;background:#0a0a0d;border:1px solid #2a2a33;border-radius:12px;padding:8px 12px}
+.player-main{display:flex;align-items:center;gap:12px;min-width:0}
+.player-tools{display:flex;align-items:stretch;gap:8px}
+.player-tools button{flex:1 1 0;min-width:0;height:34px;border-radius:8px;font-size:15px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;border-style:dashed;border-width:1px}
 .player audio{display:none}
 .player-play{flex-shrink:0;width:40px;height:40px;border-radius:50%;border:1px solid #2a6b3a;background:#0d1a0f;color:#5cc46a;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0}
 .player-play:hover{background:#12240f;border-color:#4caf50}
@@ -66,45 +63,46 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .player-thumb{position:absolute;top:50%;left:0;width:13px;height:13px;border-radius:50%;background:#7ad98a;transform:translate(-50%,-50%);box-shadow:0 0 0 4px rgba(92,196,106,.18)}
 .player-scrub:focus .player-thumb{box-shadow:0 0 0 4px rgba(92,196,106,.42)}
 .player-time{flex-shrink:0;font-family:monospace;font-size:11px;color:#9a9a9a;min-width:88px;text-align:right}
-.player-loop{flex-shrink:0;width:32px;height:32px;border-radius:8px;border:1px solid #333;background:transparent;color:#666;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;filter:grayscale(1);opacity:.6}
+.player-del{border-color:#6b2a2a;background:#1a0808;color:#d9534f}
+.player-del:hover{background:#2a1010;border-color:#ff6b68;color:#ff6b68}
+.player-dl{border-color:#2a5a6b;background:#08141a;color:#4aa8c4}
+.player-dl:hover{background:#0f2531;border-color:#6bc8e0;color:#6bc8e0}
+.rec-audio-freed{border:1px dashed #2f4a35;background:#0a120c;color:#7aa885;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left}
+.player-loop{border-color:#333;background:transparent;color:#8a8a8a;filter:grayscale(1);opacity:.6}
 .player-loop:hover{border-color:#555;color:#aaa;opacity:.85}
-.player-loop.active{border-color:#2a6b3a;background:#0d1a0f;color:#5cc46a;filter:none;opacity:1}
+.player-loop.active{border-color:#2a6b3a;background:#0d1a0f;color:#5cc46a;filter:none;opacity:1;border-style:solid}
 
-/* Live in-recording preview keeps the native controls (duration is still growing) */
-/* Live in-recording preview reuses the custom player, tinted green (no double box) */
 .rec-player-live{background:transparent;padding:0;border:0}
 .rec-player-live .player{border-color:#2a6b3a;box-shadow:inset 0 0 0 1px rgba(76,175,80,.18)}
+.rec-player-live .player-main{gap:12px}
 .rec-player-live .player-play{border-color:#4caf50;color:#7ad98a}
 
-/* Live in-recording playback preview (active recording row) */
 .live-rec-badge{display:inline-flex;align-items:center;gap:6px;color:#4caf50;font:bold 12px/1 monospace;letter-spacing:.08em;padding:3px 9px;border:1px solid #2a6b3a;border-radius:999px;background:#071209}
 .live-rec-badge .dot{width:7px;height:7px;border-radius:50%;background:#4caf50;animation:pulse-dot 1.2s ease-in-out infinite}
 .live-rec-meta{font:12px/1.4 monospace;color:#9a9a9a;padding:2px 2px 0}
+.live-rec-context{color:#6abf72}
+.live-rec-context[hidden]{display:none}
 .live-rec-clock{font:bold 15px/1 monospace;color:#7ad98a;letter-spacing:.04em;white-space:nowrap}
 .rec-item-capture-error{border-color:#7a3434!important;box-shadow:0 0 0 1px rgba(217,83,79,.25)}
 .rec-item-capture-error .live-rec-badge{color:#ff8f8b;border-color:#7a3434;background:#1b0c0c}
 .rec-item-capture-error .live-rec-badge .dot{background:#d9534f;animation:none}
 .rec-item-capture-error .live-rec-clock{color:#ffb4b4}
 
-.rec-filename{flex:1 1 320px;min-width:0;background:0;border:none;color:inherit;font:inherit;font-weight:bold;font-size:1.1em; letter-spacing: 0.5px;}
+.rec-filename{flex:1 1 320px;min-width:0;overflow-wrap:anywhere;background:0;border:none;color:inherit;font:inherit;font-weight:bold;font-size:1.1em; letter-spacing: 0.5px;}
 
-/* ─────────────── CONSOLIDATED ACTION PANELS ─────────────── */
 .action-panel { background: #151515; padding: 12px; border-radius: 10px; border: 1px solid #333; margin-top: 8px; }
 .action-panel .btn-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .action-panel .btn-row button { flex: 1; }
-.action-panel .drop-row { display: flex; gap: 6px; }
 
 .action-btn { border: 1px solid #555; border-radius: 6px; padding: 8px; color: #fff; font-weight: bold; font-size: 14px; font-family: monospace; text-align: center; }
 .action-btn.processing { color:#ffc107 !important; border-color:#ffc107 !important; opacity:.75; cursor:progress; }
 
-/* Server AI actions */
 .btn-scribe { border-color: #00bcd4; color: #00bcd4; }
 .btn-reply { border-color: #ffa726; color: #ffa726; }
 
 .action-drop { background: #0a0a0a; border: 1px dashed #555; color: #ccc; border-radius: 6px; padding: 6px; font-family: monospace; font-size: 13px; cursor: pointer; flex:1; width: 0; text-overflow: ellipsis; }
 .action-drop option { background: #111; color: #fff; }
 
-/* ─────────────── CONTEXT CHAIN ─────────────── */
 .context-chain { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
 .context-chain-summary { width: 100%; font-size: 12px; font-family: monospace; color: #4caf50; padding: 8px 10px; background: #071209; border: 1px solid #2a6b3a; border-radius: 8px; display: flex; gap: 10px; align-items: center; text-align: left; cursor: pointer; }
 .context-chain-summary:hover { background: #0a1a0f; }
@@ -118,7 +116,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .context-item-title { font-size: 11px; color: #4caf50; font-family: monospace; font-weight: bold; cursor: pointer; display: inline-block; margin-bottom: 5px; }
 .context-item-title:hover { color: #81c784; text-decoration: underline; }
 .context-item-row { display: flex; gap: 6px; align-items: stretch; }
-.context-preview { background: #050f08; border: 1px dashed #2a6b3a; color: #6abf72; border-radius: 6px; padding: 6px 8px; font-family: monospace; font-size: 12px; flex: 1; overflow-y: auto; max-height: 60px; white-space: pre-wrap; word-break: break-word; }
+.context-preview { background: #050f08; border: 1px dashed #2a6b3a; color: #6abf72; border-radius: 6px; padding: 6px 8px; font-family: monospace; font-size: 12px; flex: 1; overflow-y: auto; max-height: 60px; white-space: pre-wrap; word-break: break-word; cursor: pointer; }
+.context-preview:hover, .context-preview:focus-visible { border-color: #4caf50; }
+.ctx-copy { padding: 4px 8px; flex-shrink: 0; border-color: #2a6b3a; color: #4caf50; }
+.ctx-copy.copied { color: #4caf50; border-color: #4caf50; }
 .btn-unlink { border: 1px solid #6b2a2a; color: #d9534f; border-radius: 6px; padding: 4px 8px; font-size: 13px; flex-shrink: 0; background: #1a0808; }
 .btn-unlink:hover { background: #2a1010; color: #ff6b68; border-color: #ff6b68; }
 
@@ -129,15 +130,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .btn-delete { background: #2a1111; border-color: #d9534f; color: #d9534f; }
 .btn-delete:hover { background: #3a1111; color: #fff; border-color: #ff6b68; }
 
-/* ─────────────── LINK SET (chain several recordings → one new recording) ─────────────── */
-/* Per-row toggle in .bottom-actions. Green = the "context/link" family, same as Continue. */
 .btn-link { background: #0d2b14; border-color: #4caf50; color: #4caf50; }
 .btn-link:hover { background: #163d1e; color: #81c784; border-color: #81c784; }
 .btn-link.linked { background: #4caf50; color: #04120a; border-style: solid; border-color: #4caf50; }
 .btn-link.linked:hover { background: #5bc763; border-color: #5bc763; color: #04120a; }
 
-/* Floating tray: shows what's linked, lets you drop individual items, and starts
-   a fresh recording pre-loaded with all of them as context. Hidden while recording. */
 #link-tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 250; display: none; flex-direction: column; gap: 8px; max-width: 640px; margin: 0 auto; background: #071209; border: 1px solid #2a6b3a; border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.6); padding: 10px 14px calc(12px + env(safe-area-inset-bottom,0px)); }
 #link-tray.show { display: flex; }
 .link-tray-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -167,12 +164,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .btn-copy { background: none; border: 1px solid transparent; border-radius: 4px; color: #444; font-size: 13px; padding: 1px 5px; cursor: pointer; transition: .15s; flex-shrink: 0; }
 .btn-copy:hover { color: #aaa; border-color: #444; }
 
-/* ─────────────── COMPACT MODE ─────────────── */
 body.compact .action-panel { border: none; background: none; padding: 0; margin: 0; }
-body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:has(.btn-row)) { display: none; }
 
-/* Live status bar - visible in compact mode during processing. The main area
-   is tappable (opens the live tab); the ✕ cancels the running job. */
+.is-hidden { display: none !important; }
+.action-panel:not(:has(.sel-preview)):not(:has(.btn-row:not(.is-hidden))) { display: none; }
+
 .live-status { padding: 8px 10px; border-radius: 8px; font: bold 13px/1.4 monospace; transition: .15s; display: flex; align-items: center; gap: 8px; justify-content: space-between; }
 .live-status-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
 .live-status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -184,12 +180,6 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 .live-status-reply:hover { background: #2a1e00; }
 .live-status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse-dot 1.2s ease-in-out infinite; flex-shrink: 0; }
 
-/* ─────────────── IN-PAGE LIVE VIEW (src/js/live-inline.js) ───────────────
-   The mobile live view. A popup cannot work there: window.open() backgrounds
-   the tab that holds the stream and posts the tokens across, so the window on
-   screen waits on a window the system has throttled. This panel renders the
-   same view inside this tab instead. Built entirely from JS, hence no static
-   markup here. */
 .live-inline { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75); z-index: 400; align-items: center; justify-content: center; padding: 12px; }
 .live-inline.open { display: flex; }
 .live-inline-panel { background: #0d0d0d; border: 1px solid #333; border-radius: 14px; width: min(760px, 100%); height: min(82vh, 100%); display: flex; flex-direction: column; overflow: hidden; text-align: left; padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -198,53 +188,52 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 .live-inline-title { flex: 1; min-width: 0; font: bold 13px/1.4 monospace; color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .live-inline-close { background: transparent; border: 1px solid #444; color: #bbb; border-radius: 8px; width: 32px; height: 32px; font-size: 13px; line-height: 1; display: flex; align-items: center; justify-content: center; padding: 0; flex-shrink: 0; }
 .live-inline-close:hover { background: #222; border-color: #888; color: #fff; }
-.live-inline-status { padding: 6px 12px; background: #111; border-bottom: 1px solid #1a1a1a; font: 11px/1.4 monospace; color: #777; flex-shrink: 0; }
+.live-inline-status { padding: 6px 12px; background: #111; border-bottom: 1px solid #1a1a1a; font: 11px/1.4 monospace; color: #8a8a8a; flex-shrink: 0; }
 .live-inline-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.live-inline-foot { padding: 6px 12px; background: #111; border-top: 1px solid #1a1a1a; font: 11px/1.4 monospace; color: #555; flex-shrink: 0; }
+.live-inline-foot { padding: 6px 12px; background: #111; border-top: 1px solid #1a1a1a; font: 11px/1.4 monospace; color: #8a8a8a; flex-shrink: 0; }
 .live-inline-reply, .live-inline-transcript { padding: 16px 18px; white-space: pre-wrap; word-break: break-word; line-height: 1.8; font-size: 14.5px; color: #e8e8e8; }
 .live-inline-cursor { display: inline-block; width: 2px; height: 1em; background: #4caf50; vertical-align: text-bottom; animation: blink-cursor .7s step-end infinite; }
 @keyframes blink-cursor { 50% { opacity: 0 } }
 .live-inline-transcript .chunk-sep { display: block; height: .5em; }
 .live-inline-transcript .chunk-block { display: block; }
-.live-inline-transcript .ts { font-size: 11px; font-family: monospace; color: #666; user-select: none; margin-right: 4px; }
+.live-inline-transcript .ts { font-size: 11px; font-family: monospace; color: #8a8a8a; user-select: none; margin-right: 4px; }
 @keyframes pulse-dot { 0%,100% { opacity: .3; } 50% { opacity: 1; } }
-
-.item-card-list { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
-.item-card-header { display: flex; gap: 8px; align-items: center; margin-bottom: 3px; }
-.item-card-header-label { font-size: 11px; font-family: monospace; color: #555; flex: 1; }
-.item-card-header-kb { font-size: 11px; font-family: monospace; color: #444; }
-.item-card { background: #0d0d0d; border: 1px solid #2a2a2a; border-radius: 8px; padding: 6px 8px; }
-.item-card-title { font-size: 11px; font-family: monospace; color: #666; margin-bottom: 4px; cursor: default; }
-.item-card-row { display: flex; gap: 5px; align-items: stretch; }
-.item-card-preview { background: #070707; border: 1px dashed #333; color: #aaa; border-radius: 5px; padding: 5px 7px; font-family: monospace; font-size: 12px; flex: 1; overflow-y: auto; max-height: 56px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-.item-card-select { background: #0a0a0a; border: 1px solid #333; color: #ccc; border-radius: 5px; padding: 4px 6px; font-family: monospace; font-size: 12px; width: 100%; margin-bottom: 4px; cursor: pointer; }
-.item-card-select option { background: #111; }
 .btn-item-del { border: 1px solid #6b2a2a; color: #d9534f; border-radius: 5px; padding: 4px 7px; font-size: 12px; flex-shrink: 0; background: #1a0808; }
 .btn-item-del:hover { background: #2a1010; color: #ff6b68; border-color: #ff6b68; }
-.btn-item-view { border: 1px solid #333; color: #888; border-radius: 5px; padding: 4px 7px; font-size: 12px; flex-shrink: 0; background: #0a0a0a; }
-.btn-item-view:hover { border-color: #666; color: #ccc; }
 
-/* ─────────────── SETTINGS ─────────────── */
-#settingsBtn{position:absolute;top:14px;left:14px;z-index:200;background:#111;border:1px solid #444;border-radius:50%;width:40px;height:40px;font-size:20px;display:flex;align-items:center;justify-content:center;padding:0;transition:.2s}
+#settingsBtn{position:absolute;top:10px;left:10px;z-index:200;background:#111;border:1px solid #444;border-radius:50%;width:28px;height:28px;font-size:14px;display:flex;align-items:center;justify-content:center;padding:0;transition:.2s}
 #settingsBtn:hover{background:#222;border-color:#888}
 #settingsOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;align-items:flex-start;justify-content:center;padding-top:60px}
 #settingsOverlay.open{display:flex}
+#pasteOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:320;align-items:flex-start;justify-content:center;padding-top:40px}
+#pasteOverlay.open{display:flex}
+#pastePanel{background:#111;border:1px solid #444;border-radius:16px;padding:16px;width:min(640px,94vw);max-height:88vh;text-align:left;display:flex;flex-direction:column;gap:10px}
+#pastePanel h2{margin:0;font-size:1.1em}
+#pasteText{width:100%;box-sizing:border-box;min-height:45vh;flex:1;resize:vertical;background:#050f08;color:#cfe8d2;border:1px solid #2a6b3a;border-radius:8px;padding:10px;font:13px/1.45 monospace}
+#pasteCount{font:12px/1.4 monospace;color:#8a8a8a}
+#pasteCount.over{color:#d79a3a}
+.paste-actions{display:flex;gap:10px;justify-content:flex-end}
+.paste-actions button{padding:10px 16px}
+#pasteUse{border-color:#4caf50;color:#4caf50}
 #settingsPanel{background:#111;border:1px solid #444;border-radius:16px;padding:20px;width:min(420px,92vw);max-height:82vh;overflow-y:auto;text-align:left;display:flex;flex-direction:column;gap:14px}
 #settingsPanel h2{font-size:15px;color:#ccc;font-family:monospace;letter-spacing:.05em;margin:0}
 .settings-header{display:flex;align-items:center;justify-content:space-between}
 .settings-header h2{margin:0}
-#settingsX{background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;width:30px;height:30px;font-size:16px;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0}
-#settingsX:hover{background:#222;color:#fff;border-color:#888}
+.settings-close{background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;
+  padding:5px 14px;font-size:13px;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.settings-close:hover{background:#222;color:#fff;border-color:#888}
+#settingsX,#helpX{flex-shrink:0}
+#settingsClose,#helpClose{align-self:flex-end;margin-top:18px}
 .settings-row{display:flex;flex-direction:column;gap:5px}
 .settings-label{font-size:12px;color:#888;font-family:monospace}
 .settings-select{background:#0a0a0a;border:1px solid #444;color:#fff;border-radius:6px;padding:7px 10px;font-family:monospace;font-size:13px}
-.settings-input{background:#0a0a0a;border:1px solid #444;color:#fff;border-radius:6px;padding:7px 10px;font-family:monospace;font-size:13px;width:100%}
 .settings-textarea{background:#0a0a0a;border:1px solid #444;color:#ccc;border-radius:6px;padding:8px;font-family:monospace;font-size:12px;resize:vertical;min-height:80px;width:100%}
 .settings-inline{display:flex;gap:6px;align-items:center}
 .settings-inline .settings-select{flex:1;min-width:0}
 .settings-refresh{border:1px solid #444;background:#0a0a0a;color:#ccc;border-radius:6px;width:38px;height:38px;font-size:15px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:0}
 .settings-refresh:hover{background:#222;border-color:#888}
 .settings-hint{font-size:11px;color:#666;font-family:monospace;word-break:break-word}
+.settings-warn{color:#e0a44d;border-left:3px solid #e0a44d;padding-left:8px;margin-top:6px}
 .settings-divider{border:none;border-top:1px solid #333;margin:2px 0}
 .settings-section-label{font-size:11px;color:#666;font-family:monospace;letter-spacing:.08em;text-transform:uppercase}
 .settings-danger-row{display:flex;gap:8px}
@@ -252,14 +241,23 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 .btn-del-audio{border-color:#d9534f;color:#d9534f;background:#1a0808}
 .btn-del-audio:hover{background:#2a1010;color:#ff6b68}
 .btn-del-text{border-color:#ffa726;color:#ffa726;background:#1a1000}
+.btn-backup{border-color:#4aa8c4;color:#4aa8c4;background:#08141a;width:100%}
+.btn-backup:hover{background:#0f2531;color:#6bc8e0}
+.settings-warn{border:1px dashed #6b5a2a;background:#14100a;color:#e6c200;border-radius:8px;padding:9px 11px;line-height:1.55}
 .btn-del-text:hover{background:#2a1a00;color:#ffc55a}
-#settingsClose{align-self:flex-end;background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;padding:5px 14px;font-size:13px}
-#settingsClose:hover{background:#222;color:#fff}
+.settings-danger-row{margin-bottom:4px}
 
-/* ─────────────── HELP ("?") BUTTON + OVERLAY ─────────────── */
-#helpBtn{position:absolute;top:14px;right:14px;z-index:200;background:#111;border:1px solid #444;border-radius:50%;width:40px;height:40px;font-size:20px;display:flex;align-items:center;justify-content:center;padding:0;transition:.2s}
+#helpBtn{position:absolute;top:10px;right:10px;z-index:200;background:#111;border:1px solid #444;border-radius:50%;width:28px;height:28px;font-size:14px;display:flex;align-items:center;justify-content:center;padding:0;transition:.2s}
 #helpBtn:hover{background:#222;border-color:#888}
-#app-version{position:absolute;top:57px;right:14px;z-index:200;width:40px;text-align:center;font-family:monospace;font-size:10px;color:#777;letter-spacing:.05em;pointer-events:none}
+#app-version{position:absolute;top:40px;right:10px;z-index:200;min-width:28px;padding:0;background:transparent;text-align:center;font-family:monospace;font-size:9px;color:#777;letter-spacing:.05em;line-height:1.4;white-space:nowrap}
+#app-version:hover:not(:disabled){background:transparent;color:#bbb}
+#app-version.update-checking{color:#8ec7ff}
+#app-version.update-ready{padding:2px 5px;border:1px solid #4caf50;border-radius:6px;background:#0c1a0e;color:#5cc46a;font-weight:bold}
+#app-version.update-ready:hover:not(:disabled){background:#122416;color:#7fdc8e}
+#helpPanel .help-update{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid #2a3a2c;background:#0c120d;border-radius:8px;padding:9px 11px}
+#help-version-state{flex:1;min-width:150px;font:12px/1.5 monospace;color:#9fbfa4}
+.help-update-btn{background:#13301a;border:1px solid #2f6b3a;color:#8fe0a0;border-radius:8px;padding:6px 10px;font-size:12px;white-space:nowrap}
+.help-update-btn:hover:not(:disabled){background:#1a4024;border-color:#4caf50}
 #helpOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;align-items:flex-start;justify-content:center;padding-top:60px}
 #helpOverlay.open{display:flex}
 #helpPanel{background:#111;border:1px solid #444;border-radius:16px;padding:20px;width:min(460px,92vw);max-height:82vh;overflow-y:auto;text-align:left;display:flex;flex-direction:column;gap:12px}
@@ -268,12 +266,7 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 #helpPanel p{font-size:12.5px;color:#bbb;line-height:1.55;margin:0}
 #helpPanel .help-warn{border:1px dashed #6b5a2a;background:#14100a;border-radius:8px;padding:10px 12px;color:#e6c200;font-size:12.5px;line-height:1.55}
 #helpPanel code{background:#0a0a0a;border:1px solid #333;border-radius:4px;padding:1px 5px;font-size:11.5px;color:#9fd}
-#helpX{background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;width:30px;height:30px;font-size:16px;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0}
-#helpX:hover{background:#222;color:#fff;border-color:#888}
-#helpClose{align-self:flex-end;background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;padding:5px 14px;font-size:13px}
-#helpClose:hover{background:#222;color:#fff}
 
-/* ─────────────── PER-RECORDING STORAGE BAR ─────────────── */
 .rec-filename[data-edit-title]{cursor:text}
 .rec-filename[data-edit-title]:hover{text-decoration:underline dotted #555;text-underline-offset:3px}
 .rec-title-input{font:inherit;font-weight:bold;background:#0a0a0a;border:1px solid #4caf50;border-radius:6px;color:#fff;padding:4px 8px;width:min(100%,540px)}
@@ -281,21 +274,33 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 .rec-storage-track{flex:1;min-width:60px;max-width:340px;height:6px;background:#1a1a1a;border-radius:99px;overflow:hidden}
 .rec-storage-fill{height:100%;background:linear-gradient(90deg,#2f6b3a,#5cc46a);border-radius:99px}
 .rec-storage-label{font-family:monospace;font-size:11px;color:#777;white-space:nowrap}
+.rec-expiry{font-family:monospace;font-size:11px;color:#6b6b6b;white-space:nowrap;display:flex;gap:10px;margin:0 0 2px}
+.rec-expiry .soon{color:#e0b34d}
 
 #pagination{margin-top:1em}
-#pagination button{margin:0 .3em; padding:10px;}
-#pageInfo{margin:0 .3em}
+#paginationTop{margin:0 0 1em}
+.pagination button{margin:0 .3em;padding:10px}
+.page-btn{font-size:30px}
+.page-info{margin:0 .3em;font-size:30px}
 
-/* ─────────────── FOOTER / RECORDER ─────────────── */
-#recordBtn{padding:1em;border:none;border-radius:34px;font-size:1.25em;font-weight:bold;background:#d9534f;margin-bottom:10px}
+#record-controls{display:flex;flex-wrap:nowrap;align-items:center;justify-content:center;gap:10px;margin-bottom:10px}
+#pasteRecordBtn{width:46px;height:46px;border-radius:50%;border:1px solid #333;background:#0a0a0d;color:#8a8a8a;font-size:23px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;filter:grayscale(1);opacity:.6;transition:.2s}
+#pasteRecordBtn:hover:not(:disabled){border-color:#4caf50;color:#4caf50;filter:none;opacity:1}
+#pasteRecordBtn[hidden]{display:none}
+#liveScribeBtn{width:46px;height:46px;border-radius:50%;border:1px solid #333;background:#0a0a0d;color:#8a8a8a;font-size:19px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;filter:grayscale(1);opacity:.6;transition:.2s}
+#liveScribeBtn[hidden]{display:none}
+#liveScribeBtn:hover:not(:disabled){border-color:#00bcd4;color:#00bcd4;filter:none;opacity:1}
+#liveScribeBtn[aria-pressed="true"]{border-color:#00bcd4;background:#0a1a1f;color:#00bcd4;filter:none;opacity:1}
+#recordBtn{padding:1em;border:none;border-radius:34px;font-size:1.25em;font-weight:bold;background:#d9534f;flex:0 1 auto;min-width:0}
 #recordBtn:hover{background:#c14440}
 #recordBtn.recording{background:#4caf50}
 #recordBtn.recording:hover{background:#449d48}
 #recordBtn.locked-other{background:#2a2108;color:#e6c200;border:1px solid #6b5a2a}
+@media (max-width:420px) {#record-controls{gap:8px}#recordBtn{padding:.85em .9em;min-height:56px;font-size:clamp(15px,5.4vw,20px)}}
 
 .rec-item>.btn-row{display:flex;gap:8px}.rec-item>.btn-row button{flex:1}
-.rec-error{border:1px solid #7a3434;background:#1b0c0c;color:#ffb4b4;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left}
-.rec-warning{border:1px solid #7a642f;background:#1b1608;color:#ffd27a;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left}
+.rec-error{border:1px solid #7a3434;background:#1b0c0c;color:#ffb4b4;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left;overflow-wrap:anywhere}
+.rec-warning{border:1px solid #7a642f;background:#1b1608;color:#ffd27a;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left;overflow-wrap:anywhere}
 .rec-highlight{animation:rec-highlight 1.6s ease-out}
 @keyframes rec-highlight{0%,35%{box-shadow:0 0 0 3px rgba(92,196,106,.65)}100%{box-shadow:none}}
 :focus-visible{outline:2px solid #8ec7ff;outline-offset:3px}
@@ -303,58 +308,139 @@ body.compact .action-panel:not(:has(.sel-preview)):not(:has(.live-status)):not(:
 #visualizer{display:none;width:100%;height:160px;border-radius:14px;background:#000;cursor:pointer}
 #visualizer.fullscreen{position:fixed;inset:0;width:100vw;height:100vh;border-radius:0;z-index:500;cursor:pointer}
 #fpsDisplay{position:absolute;top:6px;right:8px;padding:3px 7px;background:rgba(0,0,0,.6);border-radius:6px;font:12px/1.4 monospace;pointer-events:none;color:#0f9;display:none}
-#fpsDisplay.fullscreen{z-index:501}
+#fpsDisplay.on{display:block}
+#fpsDisplay.fullscreen{position:fixed;top:12px;left:12px;z-index:502;padding:4px 10px;background:rgba(0,0,0,.7);border-radius:8px;font:13px/1.4 monospace}
+body.live-scribe-on{padding-bottom:calc(50vh + 90px)}
+body.live-scribe-on #visualizer{height:44px;border-radius:10px}
+body.live-scribe-on #footer.recording{padding:6px 10px 8px;border-radius:16px 16px 0 0}
 
-/* Maximized visualizer: lock the page so ONLY the visualizer shows. The fixed
-   canvas covers the viewport, but the body behind it still overflows and would
-   otherwise leave a scrollbar on the right edge (notably in Firefox). Binding
-   overflow:hidden to the canvas's own .fullscreen state means it can never fall
-   out of sync with enter/exit; whenever the canvas is maximized, so is this. */
 html:has(#visualizer.fullscreen),
 html:has(#visualizer.fullscreen) body{overflow:hidden}
+
+#live-scribe{position:fixed;left:0;right:0;bottom:0;height:50vh;z-index:260;display:none;flex-direction:column;background:#08080b;border-top:1px solid #2a2a33;box-shadow:0 -4px 16px rgba(0,0,0,.6);text-align:left;padding-bottom:env(safe-area-inset-bottom,0px)}
+body.live-scribe-on #live-scribe{display:flex}
+body.live-scribe-on #footer{bottom:50vh}
+.live-scribe-head{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:8px 12px;background:#0d0d10;border-bottom:1px solid #1c1c22;flex-shrink:0}
+.live-scribe-title{font:bold 12px/1.4 monospace;color:#00bcd4;letter-spacing:.04em;white-space:nowrap;flex-shrink:0}
+.live-scribe-info{flex:1 1 0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font:11px/1.4 monospace}
+.live-scribe-info>span:not(:empty){margin-right:10px}
+.live-scribe-status{flex:1 0 100%;min-width:0;font:11px/1.4 monospace;color:#8a8a8a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live-scribe-status:empty{display:none}
+@media (max-width:480px){.live-scribe-title-rest,#live-scribe-hearing{display:none}}
+.live-scribe-copy{flex-shrink:0;background:transparent;border:1px solid #444;color:#bbb;border-radius:8px;width:28px;height:28px;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;margin-right:6px}
+.live-scribe-copy:hover{background:#222;border-color:#888;color:#fff}
+.live-scribe-copy.done{border-color:#4caf50;color:#4caf50}
+.live-scribe-close{flex-shrink:0;background:transparent;border:1px solid #444;color:#bbb;border-radius:8px;width:28px;height:28px;font-size:12px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;flex-shrink:0}
+.live-scribe-close:hover{background:#222;border-color:#888;color:#fff}
+#live-scribe-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 16px}
+#live-scribe-text{word-break:break-word;line-height:1.7;font-size:15px;color:#e8e8e8;margin:0}
+#live-scribe-text:empty::after{content:"Listening…";color:#6b6b6b;font-style:italic}
+.ls-line{display:block;margin-bottom:5px}
+.ls-ts{font-family:monospace;font-size:11px;color:#8a8a8a;user-select:none}
+.ls-gap{color:#e0b34d}
+.ls-speaker{color:#00bcd4;font-weight:bold}
+.ls-preview{display:block;color:#8ab4c4;font-style:italic;opacity:.85;border-left:2px solid #2a5a6b;padding-left:8px;margin-top:2px}
+.live-scribe-meter-wrap{flex-shrink:0;width:54px;height:6px;background:#1a1a20;border-radius:99px;overflow:hidden}
+#live-scribe-meter{height:100%;width:0;background:#33414a;border-radius:99px;transition:width .1s linear,background .15s}
+#live-scribe-meter.speaking{background:linear-gradient(90deg,#00bcd4,#5cc46a)}
+#live-scribe-hearing{flex-shrink:0;font:11px/1.4 monospace;color:#5a5a5a;white-space:nowrap}
+#live-scribe-hearing.speaking{color:#5cc46a}
+#live-scribe-speakers{flex-shrink:0;font:11px/1.4 monospace;color:#6b6b6b;white-space:nowrap}
+#live-scribe-speakers.found{color:#00bcd4}
+#live-scribe-speakers.none{color:#e0b34d}
+#live-scribe-languages{flex-shrink:0;font:11px/1.4 monospace;color:#6b6b6b;white-space:nowrap}
+#live-scribe-languages.multi{color:#00bcd4}
+.ls-system{display:block;color:var(--ls-tone,#8ab4c4);font-style:italic;border-left:3px solid var(--ls-tone,#2a5a6b);padding-left:8px;margin:6px 0}
+.ls-sys-tag{font-weight:bold;margin-right:2px}
+.ls-sys-hint{display:block;font:10.5px/1.5 monospace;font-style:normal;color:#7a7a7a;margin-top:2px}
+#live-scribe-text.panelled{display:block;height:100%;margin:0}
+#live-scribe-body.panelled{overflow:hidden;display:flex;flex-direction:column;padding:10px 12px;min-height:0}
+.ls-panels{display:grid;grid-template-columns:repeat(var(--ls-cols,2),1fr);grid-template-rows:repeat(var(--ls-rows,1),1fr);gap:10px;flex:1;height:100%;min-height:0}
+.ls-panel{display:flex;flex-direction:column;min-width:0;min-height:0;border:2px solid var(--ls-lang,#4aa8ff);border-radius:10px;background:#0a0a0e;overflow:hidden;box-shadow:0 0 0 1px color-mix(in srgb,var(--ls-lang,#4aa8ff) 25%,transparent)}
+.ls-panel-head{flex-shrink:0;padding:5px 10px;background:color-mix(in srgb,var(--ls-lang,#4aa8ff) 22%,#0a0a0e);border-bottom:2px solid var(--ls-lang,#4aa8ff);font:bold 12px/1.4 monospace;color:var(--ls-lang,#4aa8ff);letter-spacing:.06em;text-transform:uppercase}
+.ls-panel-body{flex:1;overflow-y:auto;padding:8px 10px;font-size:13.5px;min-height:0;scrollbar-width:thin;scrollbar-color:#33414a transparent}
+.ls-row{display:block}
+.ls-panel .ls-body{color:color-mix(in srgb,var(--ls-lang,#4aa8ff) 30%,#eef3f6)}
+.ls-panel .ls-translated .ls-body{color:color-mix(in srgb,var(--ls-lang,#4aa8ff) 42%,#7d8a91)}
+.ls-from{font:10px/1.4 monospace;background:#0f1419;border:1px solid currentColor;border-radius:4px;padding:1px 5px;margin-right:5px;opacity:.95}
+.ls-from.ls-gaveup{border-style:dashed;background:transparent;opacity:.75}
+#live-scribe.offline .live-scribe-head{background:#1b1608;border-bottom-color:#6b5a2a}
+#live-scribe.offline .live-scribe-status{color:#e6c200}
+#live-scribe.offline .live-scribe-title{color:#e6c200}
+#live-scribe-body{scrollbar-width:thin;scrollbar-color:#33414a transparent}
+#live-scribe-body::-webkit-scrollbar{width:10px}
+#live-scribe-body::-webkit-scrollbar-thumb{background:#33414a;border-radius:99px;border:3px solid #08080b}
+
+body.live-scribe-on #visualizer.fullscreen{top:50vh;bottom:auto;height:50vh}
+body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-index:502;border-top:0;border-bottom:1px solid #2a2a33;padding-bottom:0}
 
 #footer{position:fixed;left:5%;right:5%;margin:auto;bottom:0;background:transparent;padding:0;border-radius:0;box-shadow:none;display:flex;flex-direction:column;align-items:center;max-width:420px;gap:0;pointer-events:none}
 #footer.recording{background:#111;padding:14px 16px 18px;border-radius:24px 24px 0 0;box-shadow:0 -2px 10px rgba(0,0,0,.5);pointer-events:all}
 #footer-inner{pointer-events:all;display:flex;flex-direction:column;align-items:center;gap:12px;width:100%;position:relative}
 @media (min-width: 600px) { #footer { left: 30%; right: 30%; } }
+
+#session-runway{margin:-0.6em 0 1em;font-size:15px;font-weight:bold;color:#8a8a8a}
+#session-runway.runway-warn{color:#d79a3a}
+#session-runway.runway-error{color:#d7553a}
+#capture-alert{margin:-0.4em 0 1em;padding:9px 12px;border:1px solid #7a3434;background:#1b0c0c;border-radius:8px;font:13px/1.5 monospace;color:#ffb4b4;text-align:left}
+#capture-alert[hidden]{display:none}
+#storage-alert{margin:-0.4em 0 1em;padding:9px 12px;border:1px solid #6b5a2a;background:#1b1608;border-radius:8px;font:13px/1.5 monospace;color:#ffd27a;text-align:left}
+#storage-alert[hidden]{display:none}
+.rec-item-capture-stalled{box-shadow:0 0 0 2px rgba(215,85,58,.55)}
 </style>
 </head>
 <body>
 
 <button id="settingsBtn" title="Settings" aria-label="Open settings">⚙️</button>
 <button id="helpBtn" title="How this app works" aria-label="Open help and storage guide">❓</button>
-<div id="app-version" aria-label="App version"></div>
+<button id="app-version" data-action="appUpdate" aria-label="App version"></button>
 
 <div id="helpOverlay" aria-hidden="true">
   <div id="helpPanel" role="dialog" aria-modal="true" aria-labelledby="helpTitle" tabindex="-1">
     <div class="settings-header">
       <h2 id="helpTitle">❓ How this app works</h2>
-      <button id="helpX" data-action="closeHelp" title="Close" aria-label="Close help">✕</button>
+      <button id="helpX" class="settings-close" data-action="closeHelp" aria-label="Close help">✕ Close</button>
     </div>
 
-    <p>Record voice notes in your browser. Audio and generated text are stored locally. AI processing is server-only: transcription sends audio chunks to your configured <code>/transcribe</code> service, and replies send transcript/context text to your configured <code>/ollama</code> service. Server-side transcription backups are optional and disabled by default.</p>
+    <div class="help-update">
+      <span id="help-version-state">Reading this build...</span>
+      <button id="help-update-btn" class="help-update-btn" data-action="appUpdate">Check for update</button>
+    </div>
 
-    <h3>🔒 Browser storage and server processing</h3>
-    <p>Recordings are saved in this browser's storage. The browser can clear that storage if you clear browsing data or it runs low on space, so a recording here is not permanent. The application contains no browser AI models and does not contact Hugging Face or a model CDN.</p>
+    <p>Record voice notes in your browser. Recordings and text are stored in this browser. Transcription sends audio to your <code>/transcribe</code> server and replies send text to your <code>/ollama</code> server; the app contacts no other service.</p>
 
-    <h3>⚠️ To keep a recording, download it</h3>
-    <p class="help-warn"><strong>Press ⬇️ Download to save a recording as a file on your device.</strong> That downloaded file is the only permanent copy. Anything you have not downloaded can disappear when the browser reclaims space.</p>
+    <h3>🔒 Keep what matters</h3>
+    <p class="help-warn"><strong>Clearing browsing data deletes every recording and transcript</strong>, and a private window keeps nothing. The browser can also evict storage when space runs low. Use ⬇️ on a recording or <strong>📦 Download backup</strong> in Settings: a downloaded file is the only copy that cannot disappear.</p>
 
-    <h3>🟢 LIVE and multiple tabs</h3>
-    <p>The active note stays in the recording list with a green border, a ticking timer, and a LIVE badge. Only one tab can record or finalize at a time. Other tabs show <strong>LIVE · OTHER TAB</strong> and cannot start a second stream until the owning tab stops or its crashed-session lease expires.</p>
+    <h3>⏳ Automatic deletion</h3>
+    <p>Audio and text are deleted when they reach the ages set in Settings, one month each by default. Each recording shows the time left, and the first deletion is asked for first.</p>
 
-    <h3>🎛️ The buttons under each recording</h3>
-    <p>
-      <strong>⬇️ Download</strong> - save this recording as a file on your device.<br>
-      <strong>🗑️ Delete</strong> - permanently remove this recording from the app.<br>
-      <strong>💬 Continue</strong> - record a follow-up that remembers this note, so your recordings can build on each other.<br>
-      <strong>🔗 Link</strong> - select several recordings to bundle them together for a single follow-up.
-    </p>
+    <h3>🎛️ Buttons</h3>
+    <p><strong>📋</strong> beside Start Recording begins a recording that remembers whatever is on the clipboard: the pasted text is attached as context and goes to the AI with the note, exactly like <strong>💬 Continue</strong> does with an earlier recording. If the browser will not hand over the clipboard, or it is empty, a box opens to paste or type into instead, holding up to 100,000 characters with line breaks intact. During a recording, 📋 stays where it is and adds whatever is on the clipboard to that recording as one more context item, so something you find halfway through still reaches the AI reply; the live row says how many items the recording carries. It appears in the note's context block, where it can be inspected or removed: tap its text to read it whole, and the 📋 beside it copies the whole text back to the clipboard.</p>
+
+    <p><strong>⬇️ Download</strong> saves the recording as a file. <strong>🗑️ Delete</strong> removes it. <strong>💬 Continue</strong> records a follow-up that remembers this note. <strong>🔗 Link</strong> bundles several recordings for one follow-up. The small 🗑️ beside ▶ deletes only the audio and keeps the text.</p>
+
+    <h3>🟢 LIVE and tabs</h3>
+    <p>The recording in progress shows a LIVE badge. Only one tab records at a time; other tabs show <strong>LIVE · OTHER TAB</strong>. After Stop the recording says <strong>Saving…</strong> until it is saved. If a tab is closed during a recording, any tab still open recovers what it stored, within a minute and without a reload; until then the recording offers <strong>Recover now</strong> and Delete.</p>
+
+    <h3>📝 Live transcription</h3>
+    <p>📝 beside Start Recording starts a recording with live transcription on, whatever the setting says; 📋 on the other side starts one with the clipboard as context (or, during a recording, adds to it), and the big button starts a plain one that follows the setting. During a recording, 📝 shows or hides the transcript a few seconds behind speech; tap the waveform for fullscreen; Settings can draw it less often, or not at all, to save battery. Italic text is the sentence still being spoken. If the connection drops, audio waits in order and is sent when it returns. If the server keeps failing on a few seconds of audio while it answers the rest, that part is left out here with a note. With <strong>Auto-transcribe</strong> on, every part the live transcript missed is transcribed after the recording; with it off, the saved transcript marks each such part <strong>[not transcribed live]</strong> and the recording offers <strong>📝 Fill gaps</strong>, which sends only those parts. The live transcript is saved with the recording as it grows, at least every five minutes, and transcribing after recording only sends the parts it missed. <strong>Cleanup pass</strong> in Settings rereads the whole recording.</p>
+    <p>A phrase repeated where two audio windows overlap is re-listened to, and changed only when the second listen clearly hears it once.</p>
+
+    <h3>🎤 Is it really recording?</h3>
+    <p>The recorder counts the audio that actually arrives, not the seconds on the clock. If sound stops reaching it, for any reason, a red line appears above the list within four seconds and the recording is marked incomplete. The recording is never stopped by that warning, and it clears itself when sound comes back. So a screen with no warning on it means audio really is being captured.</p>
+
+    <h3>🗂️ Two tabs, two versions</h3>
+    <p>Updates never delete your notes. A release that changes how notes are stored only adds what it needs and leaves everything already saved in place. If a newer version opens while another tab is recording or still working on a note, that tab goes first: the newer version waits, and starts by itself as soon as the recording, and anything it started such as automatic transcription, has finished.</p>
+
+    <h3>⬇️ Updates</h3>
+    <p>The version under ❓ is the build this page is running. Tap it to check the server for a newer one. When one is ready the version reads <strong>this build › the new build</strong>; tap it again to load it. A version shown on its own is always the code actually running, so it never needs a second refresh. Nothing reloads by itself, and nothing reloads at all while this tab is recording, saving a recording, transcribing, writing a reply or making a backup. The second tap then says so; tap once more when that work has finished.</p>
+    <p>If a browser keeps serving its own cached copy of the app and refuses the new build, the second tap clears the installed shell and loads it from the server. Recordings, transcripts and settings are not touched by that.</p>
 
     <h3>💾 Space</h3>
-    <p>The audio counter shows the combined size of saved recordings and in-progress audio chunks. It always uses megabytes with two decimal places. Each recording bar shows its share of saved audio.</p>
+    <p>The audio counter shows saved and in-progress audio in megabytes. Each recording bar shows its share. While recording, the line below it estimates how much longer this note can run from free space.</p>
 
-    <button id="helpClose" data-action="closeHelp">Close</button>
+    <button id="helpClose" class="settings-close" data-action="closeHelp" aria-label="Close help">✕ Close</button>
   </div>
 </div>
 
@@ -362,7 +448,7 @@ html:has(#visualizer.fullscreen) body{overflow:hidden}
   <div id="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" tabindex="-1">
     <div class="settings-header">
       <h2 id="settingsTitle">⚙️ Settings</h2>
-      <button id="settingsX" data-action="closeSettings" title="Close" aria-label="Close settings">✕</button>
+      <button id="settingsX" class="settings-close" data-action="closeSettings" aria-label="Close settings">✕ Close</button>
     </div>
     <div class="settings-row">
       <label class="settings-label" for="set-auto-transcribe">Auto-transcribe after recording</label>
@@ -386,12 +472,24 @@ html:has(#visualizer.fullscreen) body{overflow:hidden}
       </select>
     </div>
     <div class="settings-row">
+      <label class="settings-label" for="set-waveform-fps">Recording waveform</label>
+      <select class="settings-select" id="set-waveform-fps">
+        <option value="0">Off - least battery</option>
+        <option value="10">10 frames a second</option>
+        <option value="15">15 frames a second</option>
+        <option value="30">30 frames a second (default)</option>
+        <option value="60">60 frames a second</option>
+        <option value="auto">Auto - every refresh of this screen</option>
+      </select>
+      <div class="settings-hint">The most times a second the waveform is redrawn during a recording. Fewer frames use less battery on a phone; the recording is the same either way. <strong>Auto</strong> follows the screen the app is on, whatever its refresh rate (60, 120, 144 Hz or more): the smoothest, and on a fast phone screen the most battery. A change applies at once, also to a recording in progress.</div>
+    </div>
+    <div class="settings-row">
       <label class="settings-label" for="set-recording-format">Recording format</label>
       <select class="settings-select" id="set-recording-format">
-        <option value="wav">WAV uncompressed (default)</option>
-        <option value="opus">Opus compressed (Chrome/Firefox)</option>
+        <option value="opus">Opus compressed (default)</option>
+        <option value="wav">WAV uncompressed</option>
       </select>
-      <div class="settings-hint">Existing recordings keep their format. New WebM/Opus downloads include finite duration metadata for normal seeking.</div>
+      <div class="settings-hint">Opus is about twenty-five times smaller than WAV for the same recording. WAV is used automatically where the browser cannot record Opus. Existing recordings keep their format.</div>
     </div>
     <div class="settings-row">
       <label class="settings-label" for="set-transcribe-lang">Transcription language</label>
@@ -418,45 +516,145 @@ html:has(#visualizer.fullscreen) body{overflow:hidden}
     <div class="settings-row">
       <label class="settings-label" for="set-ai-instructions">Default AI instructions for all conversations</label>
       <textarea class="settings-textarea" id="set-ai-instructions" placeholder="e.g. Always reply in Dutch. Be concise. Focus on action items."></textarea>
-      <div class="settings-hint">Prefilled with a default that keeps replies readable here, since replies render as plain text. Replace it freely; empty the box to restore it.</div>
+      <div class="settings-hint">Replies render as plain text. Empty the box to restore the default.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-live-transcribe">Start recordings with live transcription on</label>
+      <select class="settings-select" id="set-live-transcribe">
+        <option value="off">Off (default)</option>
+        <option value="on">On</option>
+      </select>
+      <div class="settings-hint">Uploads audio to your transcription server from the moment you press record. 📝 turns it off and on during a recording.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-opus-bitrate">Opus quality</label>
+      <select class="settings-select" id="set-opus-bitrate">
+        <option value="24">24 kbps - longest sessions</option>
+        <option value="32">32 kbps (default)</option>
+        <option value="48">48 kbps</option>
+        <option value="64">64 kbps</option>
+        <option value="96">96 kbps - closest to uncompressed</option>
+      </select>
+      <div class="settings-hint">Only for Opus. 32 kbps is about 14 MB an hour and transcribes as well as the browser default of about 55 MB an hour.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-speaker-detection">Label different speakers (experimental)</label>
+      <select class="settings-select" id="set-speaker-detection">
+        <option value="off">Off (default)</option>
+        <option value="on">On</option>
+      </select>
+      <div class="settings-hint">Needs a transcription server with a voice model. With one microphone this is a best guess: it can split one person or merge two.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-speaker-policy">How speakers are named</label>
+      <select class="settings-select" id="set-speaker-policy">
+        <option value="numbers">Numbers only (default)</option>
+        <option value="infer">Named by the conversation</option>
+      </select>
+      <div class="settings-hint"><strong>Numbers only</strong> never guesses. <strong>Named by the conversation</strong> listens for introductions and <em>suggests</em> a name once it is confident, showing how confident it is as it listens. Nothing is ever applied on its own: say &ldquo;confirm speaker 3&rdquo; to accept a suggestion, or say nothing and the speaker stays a number. Voices that introduce themselves with the same name are suggested as one person, and joining them also waits for your confirmation.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-max-speakers">Most speakers to distinguish</label>
+      <select class="settings-select" id="set-max-speakers">
+        <option value="2">2</option>
+        <option value="3">3</option>
+        <option value="4">4 (default)</option>
+        <option value="6">6</option>
+        <option value="8">8</option>
+        <option value="12">12</option>
+        <option value="16">16</option>
+      </select>
+      <div class="settings-hint">A ceiling, not a target: past it the two closest voices are merged. 16 is the maximum.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-translate-panels">Live translation panels (experimental)</label>
+      <select class="settings-select" id="set-translate-panels">
+        <option value="off">Off (default)</option>
+        <option value="2">2 panels</option>
+        <option value="3">3 panels</option>
+        <option value="4">4 panels</option>
+      </select>
+      <div class="settings-hint">One panel per language heard, showing every line in that language; other lines are translated and tagged. Translation runs continuously on your reply server. While that server is down or busy, lines wait and are translated when it answers again, however far up they have scrolled.</div>
+    </div>
+    <hr class="settings-divider">
+    <div class="settings-section-label">Your data lives in this browser</div>
+    <div class="settings-row">
+      <div class="settings-hint settings-warn">Recordings and text are stored by <strong>this browser, on this device</strong>. Clearing your browsing data or site data deletes all of it. A private or incognito window keeps nothing at all once it is closed. The browser may also evict this storage on its own when the device runs low on space, and automatic deletion below removes things on a schedule. <strong>A downloaded backup is the only copy that survives any of that.</strong></div>
+      <button class="settings-danger-btn btn-backup" data-action="downloadBackup">📦 Download backup (.zip)</button>
+      <div class="settings-hint">One ZIP with every recording, plus <code>transcripts.json</code> with all text.</div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-second-pass">Cleanup pass after recording</label>
+      <select class="settings-select" id="set-second-pass">
+        <option value="off">Off (default)</option>
+        <option value="keep">On - keep both readings</option>
+        <option value="replace">On - keep only the cleaned-up one</option>
+      </select>
+      <div class="settings-hint">Rereads the whole recording in 60-second windows after it ends, fixing what 4-second live windows get wrong.</div>
+    </div>
+    <hr class="settings-divider">
+    <div class="settings-section-label">Automatic deletion</div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-retention-audio">Delete audio after</label>
+      <select class="settings-select" id="set-retention-audio"></select>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-retention-text">Delete transcripts and replies after</label>
+      <select class="settings-select" id="set-retention-text"></select>
+      <div class="settings-hint">Audio ages from when its recording ended, text from when it was generated; a transcript stays as long as a reply written from it does. Nothing is kept forever: download anything you want to keep. A month is 30 days, a year 365.</div>
+      <div class="settings-hint settings-warn"><strong>Shortening either window deletes immediately.</strong> These are not rules that only apply to future recordings: choosing 5 minutes means everything older than 5 minutes is overdue the moment you confirm, and the next sweep removes it - months of recordings, in one step, with no undo. You will be shown exactly how many and how far back before anything happens, and offered a backup first; after a backup, nothing is deleted until you confirm the ZIP was saved.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-section-label">Server processing</div>
     <div class="settings-row">
-      <label class="settings-label" for="set-ollama-model">Reply model</label>
+      <label class="settings-label" for="set-ollama-model">AI model</label>
       <div class="settings-inline">
-        <select class="settings-select" id="set-ollama-model" aria-label="Ollama model"></select>
+        <select class="settings-select" id="set-ollama-model" aria-label="AI model"></select>
         <button class="settings-refresh" data-action="refreshOllamaModels" title="Reload model list from server" aria-label="Reload model list from server">🔄</button>
       </div>
       <div class="settings-hint" id="ollama-model-status">Open settings to load installed models…</div>
+      <div class="settings-hint">Used for both replies and live translation. One shared model avoids an unnecessary model swap and keeps the setting unambiguous.</div>
     </div>
     <div class="settings-row">
-      <label class="settings-label" for="set-remote-backups">Store server-side transcription backups</label>
-      <select class="settings-select" id="set-remote-backups">
-        <option value="off">Off (default)</option>
-        <option value="on">On</option>
-      </select>
-      <div class="settings-hint">When enabled, each uploaded transcription chunk and its result may be retained by the compatible server. This does not affect recordings stored in this browser.</div>
+      <label class="settings-label">Loaded on the server</label>
+      <div class="settings-inline">
+        <button class="settings-refresh" data-action="refreshLoadedModels" title="Ask the server which models are loaded" aria-label="Ask the server which models are loaded">🔄</button>
+      </div>
+      <div class="settings-hint" id="ollama-loaded-status">Open settings to read what the server has loaded…</div>
+      <div class="settings-hint">Partly on the CPU means the currently loaded models do not fit entirely in video memory.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-danger-row">
       <button class="settings-danger-btn btn-del-audio" data-action="deleteAllAudio">🗑️ Delete All Audio</button>
       <button class="settings-danger-btn btn-del-text" data-action="deleteAllText">🧹 Delete All Text</button>
     </div>
-    <button id="settingsClose" data-action="closeSettings">Close</button>
+    <button id="settingsClose" class="settings-close" data-action="closeSettings" aria-label="Close settings">✕ Close</button>
   </div>
 </div>
 
 <div id="main-ui">
-  <button id="recordBtn">Start Recording</button>
-  <div id="storage-info" style="margin-bottom:1em;font-weight:bold;color:#888;">Audio: 0.00 MB • Available: calculating… • calculating…</div>
+  <div id="record-controls">
+    <button id="pasteRecordBtn" title="Start a recording that remembers what is on the clipboard" aria-label="Record with the clipboard as context">📋</button>
+    <button id="recordBtn">Start Recording</button>
+    <button id="liveScribeBtn" title="Start a recording with live transcription on" aria-label="Start a recording with live transcription on">📝</button>
+  </div>
+  <div id="storage-info" style="margin-bottom:1em;font-weight:bold;color:#888;">Audio: 0.00 MB • Available: calculating…</div>
+  <div id="session-runway" hidden></div>
+  <div id="capture-alert" role="alert" hidden></div>
+  <div id="storage-alert" role="alert" hidden></div>
+
+  <div id="paginationTop" class="pagination" hidden>
+    <button id="prevPageTopBtn" class="page-btn">« Prev</button>
+    <span id="pageInfoTop" class="page-info"></span>
+    <button id="nextPageTopBtn" class="page-btn">Next »</button>
+  </div>
 
   <ul id="recordingsList" class="rec-list"></ul>
 
-  <div id="pagination" hidden>
-    <button id="prevPageBtn" style="font-size:30px;">« Prev</button>
-    <span id="pageInfo" style="font-size:30px;"></span>
-    <button id="nextPageBtn" style="font-size:30px;">Next »</button>
+  <div id="pagination" class="pagination" hidden>
+    <button id="prevPageBtn" class="page-btn">« Prev</button>
+    <span id="pageInfo" class="page-info"></span>
+    <button id="nextPageBtn" class="page-btn">Next »</button>
   </div>
 
   <div id="footer">
@@ -469,12 +667,33 @@ html:has(#visualizer.fullscreen) body{overflow:hidden}
   </div>
 </div>
 
-<!-- Link tray: floating basket of recordings to chain into one new recording.
-     Populated/updated by renderLinkTray() in src/js/gui.js; empty by default. -->
+<div id="live-scribe" role="region" aria-label="Live transcription" aria-hidden="true">
+  <div class="live-scribe-head">
+    <span class="live-scribe-title">📝 LIVE<span class="live-scribe-title-rest"> TRANSCRIPTION</span></span>
+    <span class="live-scribe-info"><span id="live-scribe-speakers"></span><span id="live-scribe-languages"></span><span id="live-scribe-hearing">· quiet ·</span></span>
+    <div class="live-scribe-meter-wrap" aria-hidden="true"><div id="live-scribe-meter"></div></div>
+    <button class="live-scribe-copy" id="live-scribe-copy" title="Copy the whole transcript" aria-label="Copy transcript">📋</button>
+    <button class="live-scribe-close" data-action="closeLiveScribe" title="Hide live transcription" aria-label="Hide live transcription">✕</button>
+    <span class="live-scribe-status" id="live-scribe-status" role="status" aria-live="polite"></span>
+  </div>
+  <div id="live-scribe-body"><p id="live-scribe-text"></p></div>
+</div>
+
+<div id="pasteOverlay" aria-hidden="true">
+  <div id="pastePanel" role="dialog" aria-modal="true" aria-labelledby="pasteTitle" tabindex="-1">
+    <h2 id="pasteTitle">📋 Text for this recording</h2>
+    <div class="settings-hint" id="pasteHint"></div>
+    <textarea id="pasteText" spellcheck="false" autocomplete="off" aria-label="Text to attach as context"></textarea>
+    <div id="pasteCount">0 characters</div>
+    <div class="paste-actions">
+      <button id="pasteCancel" class="action-btn">Cancel</button>
+      <button id="pasteUse" class="action-btn">Use this text</button>
+    </div>
+  </div>
+</div>
+
 <div id="link-tray"></div>
 
-<!-- Screen wake-lock is handled natively in src/js/wake-lock.js (imported as a
-     module by the recorder) - no external library, no <script> tag needed. -->
 <script type="module" src="src/js/main.js"></script>
 </body>
 </html>

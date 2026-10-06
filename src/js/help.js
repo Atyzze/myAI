@@ -1,9 +1,5 @@
-/* ==========================================================================
-   help.js - The "?" guide overlay.
+import { checkForUpdate } from './version.js';
 
-   Content is static markup in index.html (#helpOverlay); this module only
-   toggles it open and closed.
-   ========================================================================== */
 let _helpReturnFocus = null;
 
 export function openHelp() {
@@ -14,6 +10,7 @@ export function openHelp() {
         o.setAttribute('aria-hidden', 'false');
         requestAnimationFrame(() => document.getElementById('helpPanel')?.focus());
     }
+    try { Promise.resolve(checkForUpdate()).catch(() => {}); } catch (_) {}
 }
 
 export function closeHelp() {

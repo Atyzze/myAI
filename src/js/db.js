@@ -1,73 +1,125 @@
-/* ==========================================================================
-   db.js - IndexedDB wrapper: open, exec, transactional update, storage calc,
-           maintenance helpers (orphan sweep + legacy-id migration)
-   ========================================================================== */
-import { openDB } from './idb-min.js';   // hand-written wrapper (no external lib)
-import { CONFIG, uid, fmtAudioMegabytes, fmtStorageGigabytes, fmtStorageFullPercent } from './config.js';
+import { openDB } from './idb-min.js';
+import { shouldCloseForUpgrade, isStaleVersionError, schemaLayout, applySchema } from './db-lifecycle-core.js';
+import { CONFIG, uid, fmtAudioMegabytes, fmtStorageGigabytes, fmtStorageFullPercent,
+         readStored, writeStored } from './config.js';
 
-// ── Open / upgrade ──
-// v8 moves NEW fragment writes to an auto-increment store. The legacy
-// [recId, seq] store is retained read-only so interrupted recordings created by
-// older releases can still finish normally. Runtime readers aggregate both
-// stores where needed.
-export const dbPromise = openDB(CONFIG.DB_NAME, 8, {
-    upgrade(db, _oldVersion, _newVersion) {
-        if (!db.objectStoreNames.contains(CONFIG.STORE_REC)) {
-            db.createObjectStore(CONFIG.STORE_REC, { keyPath: 'id', autoIncrement: true })
-              .createIndex('by-date', 'timestamp');
-        }
-        if (!db.objectStoreNames.contains(CONFIG.STORE_WAV)) {
-            const fragments = db.createObjectStore(CONFIG.STORE_WAV, {
-                keyPath: 'fragmentId', autoIncrement: true
-            });
-            fragments.createIndex('by-rec', 'recId', { unique: false });
-            fragments.createIndex('by-session', 'sessionId', { unique: false });
-            fragments.createIndex('by-stream', ['recId', 'sessionId'], { unique: false });
-            // A retry may fail loudly, but it can no longer overwrite bytes from
-            // another capture stream sharing a legacy recording id.
-            fragments.createIndex('by-stream-seq', ['recId', 'sessionId', 'seq'], { unique: true });
-        }
-    }
-});
+let _busy = () => false;
+let _recording = () => false;
+let _notify = () => {};
+let _notifiedContext = '';
+let _dbPromise = null;
+let _guard = 'open';
 
-function audioStoreNames(db) {
-    return [CONFIG.STORE_WAV, CONFIG.LEGACY_STORE_WAV]
-        .filter((name, index, names) => name && names.indexOf(name) === index && db.objectStoreNames.contains(name));
+export function setDatabaseBusyCheck(fn, recordingFn = null) {
+    _busy = typeof fn === 'function' ? fn : (() => false);
+    _recording = typeof recordingFn === 'function' ? recordingFn : _busy;
 }
 
-export async function getAudioFragmentsForRecording(recId) {
-    const db = await dbPromise;
-    const rows = [];
-    for (const store of audioStoreNames(db)) {
-        const values = await db.getAllFromIndex(store, 'by-rec', recId);
-        rows.push(...values.map(value => ({ ...value, _fragmentStore: store })));
+function guardContext() {
+    return { recording: _recording() === true, busy: _busy() === true };
+}
+
+export function setDatabaseGuardListener(fn) {
+    _notify = typeof fn === 'function' ? fn : (() => {});
+}
+
+export function databaseGuardState() { return _guard; }
+
+function setGuard(next) {
+    if (_guard === next) return;
+    _guard = next;
+    const context = guardContext();
+    _notifiedContext = `${context.recording}:${context.busy}`;
+    try { _notify(next, context); } catch (_) {}
+}
+
+function refreshGuard() {
+    const context = guardContext();
+    const key = `${context.recording}:${context.busy}`;
+    if (key === _notifiedContext) return;
+    _notifiedContext = key;
+    try { _notify(_guard, context); } catch (_) {}
+}
+
+let _releaseWhenIdle = null;
+
+function openDatabase() {
+    return openDB(CONFIG.DB_NAME, CONFIG.DB_VERSION, {
+        canClose: () => shouldCloseForUpgrade({ recording: _busy() === true }),
+        onClosed: () => { _dbPromise = null; setGuard('closed'); },
+        onBlocked: (info) => {
+            if (info && info.holding && typeof info.release === 'function') _releaseWhenIdle = info.release;
+            setGuard('blocked');
+        },
+        upgrade(db, _oldVersion, _newVersion, upgradeTx) {
+            applySchema(db, upgradeTx, schemaLayout(CONFIG));
+        }
+    });
+}
+
+export function noteDatabaseIdle() {
+    if (!_releaseWhenIdle) return false;
+    if (_busy() === true) { refreshGuard(); return false; }
+    const release = _releaseWhenIdle;
+    _releaseWhenIdle = null;
+    release();
+    return true;
+}
+
+function database() {
+    if (!_dbPromise) {
+        _dbPromise = openDatabase().then(db => { setGuard('open'); return db; }, err => {
+            _dbPromise = null;
+            if (isStaleVersionError(err)) setGuard('stale');
+            throw err;
+        });
     }
-    return rows;
+    return _dbPromise;
+}
+
+
+export async function getAudioFragmentsForRecording(recId) {
+    const db = await database();
+    const values = await db.getAllFromIndex(CONFIG.STORE_FRAGMENTS, 'by-rec', recId);
+    return values.map(value => ({ ...value, _fragmentStore: CONFIG.STORE_FRAGMENTS }));
+}
+
+export async function audioFragmentSummary(recId) {
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_FRAGMENTS);
+    let pieces = 0;
+    let bytes = 0;
+    let cursor = await tx.store.index('by-rec').openCursor(recId);
+    while (cursor) {
+        const row = cursor.value;
+        pieces++;
+        bytes += Number(row && (row.bytes ?? (row.blob && row.blob.size))) || 0;
+        cursor = await cursor.continue();
+    }
+    await tx.done;
+    return { pieces, bytes };
 }
 
 export async function deleteAudioFragments(recId, sessionId = null, { allSessions = false } = {}) {
-    const db = await dbPromise;
-    for (const store of audioStoreNames(db)) {
-        const tx = db.transaction(store, 'readwrite');
-        let cursor = await tx.store.index('by-rec').openCursor(recId);
-        while (cursor) {
-            const row = cursor.value;
-            const matches = allSessions || (sessionId ? row.sessionId === sessionId : !row.sessionId);
-            if (matches) await cursor.delete();
-            cursor = await cursor.continue();
-        }
-        await tx.done;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_FRAGMENTS, 'readwrite');
+    let cursor = await tx.store.index('by-rec').openCursor(recId);
+    while (cursor) {
+        const row = cursor.value;
+        const matches = allSessions || (sessionId ? row.sessionId === sessionId : !row.sessionId);
+        if (matches) await cursor.delete();
+        cursor = await cursor.continue();
     }
+    await tx.done;
 }
 
 export async function clearAllAudioFragments() {
-    const db = await dbPromise;
-    for (const store of audioStoreNames(db)) await db.clear(store);
+    const db = await database();
+    await db.clear(CONFIG.STORE_FRAGMENTS);
 }
 
-// ── Generic store executor ──
 export async function dbExec(store, action, data) {
-    const db = await dbPromise;
+    const db = await database();
     if (action === 'getAllFromIndex') {
         return db.getAllFromIndex(store, data.index, data.val);
     }
@@ -93,28 +145,175 @@ export async function dbExec(store, action, data) {
     return db[action](store, data);
 }
 
-/**
- * Atomic read-modify-write on a single record: get → mutate → put inside ONE
- * readwrite transaction, so two callers (e.g. a transcribe and a reply running
- * close together, or two tabs) can't clobber each other's writes via a stale
- * read. `mutate(rec)` may mutate-in-place and return it, return a new object, or
- * return undefined/null to skip the put. Returns the stored object (or null).
- *
- * IMPORTANT - `mutate` MUST be synchronous. An IndexedDB transaction auto-commits
- * as soon as control returns to the event loop with no pending request, so if
- * `mutate` were to `await` anything that doesn't settle in the same microtask
- * (a fetch, a timer, a cross-task promise), the transaction would commit before
- * the put below and the put would throw `TransactionInactiveError`. We therefore
- * call it synchronously (no `await`) and require callers to keep it sync.
- */
+export async function readLiveTranscript(recId) {
+    if (recId == null) return null;
+    const db = await database();
+    const row = await db.get(CONFIG.STORE_LIVE, recId);
+    return (row && row.live) || null;
+}
+
+export async function readAudio(recId) {
+    if (recId == null) return null;
+    const db = await database();
+    const row = await db.get(CONFIG.STORE_AUDIO, recId);
+    return (row && row.blob) || null;
+}
+
+export async function writeAudio(recId, blob) {
+    if (recId == null) return false;
+    if (!blob) return deleteAudio(recId);
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_AUDIO, 'readwrite');
+    await tx.store.put({ recId, blob, bytes: blob.size, at: Date.now() });
+    await tx.done;
+    return true;
+}
+
+export async function commitAudio(recId, blob, mutate) {
+    if (recId == null || !blob) return null;
+    const db = await database();
+    const tx = db.transactionOver([CONFIG.STORE_REC, CONFIG.STORE_AUDIO], 'readwrite');
+    const current = await tx.stores[CONFIG.STORE_REC].get(recId);
+    const next = mutate(current);
+    if (next && typeof next.then === 'function') {
+        throw new TypeError('commitAudio(mutate) must be synchronous, like dbUpdate.');
+    }
+    if (next != null) {
+        await tx.stores[CONFIG.STORE_REC].put(next);
+        await tx.stores[CONFIG.STORE_AUDIO].put({ recId, blob, bytes: blob.size, at: Date.now() });
+    }
+    await tx.done;
+    return next ?? null;
+}
+
+export async function cleanupOrphanAudio() {
+    const db = await database();
+    const keys = await db.transaction(CONFIG.STORE_AUDIO).store.getAllKeys();
+    let removed = 0;
+    for (const recId of keys) {
+        const tx = db.transactionOver([CONFIG.STORE_REC, CONFIG.STORE_AUDIO], 'readwrite');
+        const rec = await tx.stores[CONFIG.STORE_REC].get(recId);
+        const owned = !!rec && (Number(rec.audioBytes) > 0 || !!rec.processing);
+        if (!owned) {
+            await tx.stores[CONFIG.STORE_AUDIO].delete(recId);
+            removed++;
+        }
+        await tx.done;
+    }
+    if (removed) await calcTotalStorage();
+    return removed;
+}
+
+export async function deleteAudio(recId) {
+    if (recId == null) return false;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_AUDIO, 'readwrite');
+    await tx.store.delete(recId);
+    await tx.done;
+    return true;
+}
+
+export async function audioBytesTotal() {
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_AUDIO);
+    let total = 0;
+    let cursor = await tx.store.openCursor();
+    while (cursor) {
+        total += Number(cursor.value && cursor.value.bytes) || 0;
+        cursor = await cursor.continue();
+    }
+    await tx.done;
+    return total;
+}
+
+
+export async function writeLiveTranscript(recId, live) {
+    if (recId == null) return false;
+    const db = await database();
+    if (!live) return deleteLiveTranscript(recId);
+    const tx = db.transaction(CONFIG.STORE_LIVE, 'readwrite');
+    await tx.store.put({ recId, live, at: Date.now() });
+    await tx.done;
+    return true;
+}
+
+export async function updateLiveTranscript(recId, mutate) {
+    const current = await readLiveTranscript(recId);
+    const next = mutate(current);
+    if (!next) return false;
+    return writeLiveTranscript(recId, next);
+}
+
+export async function deleteLiveTranscript(recId) {
+    if (recId == null) return false;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_LIVE, 'readwrite');
+    await tx.store.delete(recId);
+    await tx.done;
+    return true;
+}
+
+export async function writeCaptureBeat(beat) {
+    if (!beat || beat.recId == null) return false;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_BEATS, 'readwrite');
+    await tx.store.put(beat);
+    await tx.done;
+    return true;
+}
+
+export async function readCaptureBeats() {
+    try {
+        const db = await database();
+        const rows = await db.getAll(CONFIG.STORE_BEATS);
+        return new Map((rows || []).filter(row => row && row.recId != null).map(row => [Number(row.recId), row]));
+    } catch (_) {
+        return new Map();
+    }
+}
+
+export async function deleteCaptureBeat(recId) {
+    if (recId == null) return false;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_BEATS, 'readwrite');
+    await tx.store.delete(recId);
+    await tx.done;
+    return true;
+}
+
+export async function cleanupOrphanCaptureBeats() {
+    const db = await database();
+    const beats = await db.getAll(CONFIG.STORE_BEATS);
+    let removed = 0;
+    for (const beat of beats || []) {
+        if (!beat || beat.recId == null) continue;
+        const rec = await db.get(CONFIG.STORE_REC, beat.recId);
+        if (rec && rec.processing && rec.ownerId && rec.ownerId === beat.ownerId) continue;
+        await deleteCaptureBeat(beat.recId);
+        removed++;
+    }
+    return removed;
+}
+
+export async function cleanupOrphanLiveTranscripts() {
+    const db = await database();
+    const liveTranscriptRecIds = await db.getAllKeys(CONFIG.STORE_LIVE);
+    if (!liveTranscriptRecIds.length) return 0;
+    const recordingIds = new Set((await db.getAllKeys(CONFIG.STORE_REC)).map(key => String(key)));
+    let removed = 0;
+    for (const recId of liveTranscriptRecIds) {
+        if (recId == null || recordingIds.has(String(recId))) continue;
+        await deleteLiveTranscript(recId);
+        removed++;
+    }
+    return removed;
+}
+
 export async function dbUpdate(store, key, mutate) {
-    const db = await dbPromise;
+    const db = await database();
     const tx = db.transaction(store, 'readwrite');
     const cur = await tx.store.get(key);
-    const next = mutate(cur);                 // synchronous by contract (see above)
-    // Enforce the contract instead of only documenting it. An async mutate would
-    // otherwise let the transaction auto-commit first and surface as a confusing
-    // TransactionInactiveError from the put below, far from the actual mistake.
+    const next = mutate(cur);
     if (next && typeof next.then === 'function') {
         throw new TypeError(
             'dbUpdate(mutate) must be synchronous: an IndexedDB transaction auto-commits ' +
@@ -127,20 +326,8 @@ export async function dbUpdate(store, key, mutate) {
     return next ?? null;
 }
 
-/**
- * Fetch ONE page of recordings, newest-first, without loading the whole store.
- * Walks the `by-date` index backwards (newest timestamp first), skips the rows
- * before the page in a single cursor.advance(), then collects up to pageSize
- * rows. `total` comes from a cheap index count(). The page index is clamped to
- * the valid range here (deletions may have shrunk the list since it was set), so
- * the returned page always matches the returned pageIndex.
- *
- * This replaces getAllFromIndex()+reverse()+slice, which deserialized EVERY
- * record (all transcript/summary text + blob handles) on every paint just to
- * show PAGE_SIZE of them.
- */
 export async function getRecordingsPage(pageIndex, pageSize) {
-    const db = await dbPromise;
+    const db = await database();
     const tx = db.transaction(CONFIG.STORE_REC);
     const ix = tx.store.index('by-date');
 
@@ -150,7 +337,7 @@ export async function getRecordingsPage(pageIndex, pageSize) {
 
     const page = [];
     const skip = clamped * pageSize;
-    let cursor = await ix.openCursor(null, 'prev');   // newest first
+    let cursor = await ix.openCursor(null, 'prev');
     if (cursor && skip > 0) cursor = await cursor.advance(skip);
     while (cursor && page.length < pageSize) {
         page.push(cursor.value);
@@ -160,12 +347,43 @@ export async function getRecordingsPage(pageIndex, pageSize) {
     return { page, total, totalPages, pageIndex: clamped };
 }
 
-// ── Storage size display ──
-// _storageTotal reflects AUDIO bytes only - the finalized master blob plus any
-// in-flight WAV chunks. Transcript/summary/context text is intentionally not
-// counted. The browser-provided origin quota is cached separately so each
-// four-second fragment commit can update MB, remaining GB and fullness in O(1)
-// without calling navigator.storage.estimate() on the hot path.
+export const UNFINISHED_CAPTURE_STATES = Object.freeze(['starting', 'recording', 'finalizing', 'finalize-error']);
+
+export async function getUnfinishedRecordings() {
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_REC);
+    const byState = tx.store.index('by-state');
+    const rows = [];
+    for (const state of UNFINISHED_CAPTURE_STATES) rows.push(...await byState.getAll(state));
+    await tx.done;
+    return rows.filter(rec => rec && rec.processing);
+}
+
+export async function recordingPosition(recId) {
+    const db = await database();
+    const rec = await db.get(CONFIG.STORE_REC, recId);
+    if (!rec) return -1;
+    const tx = db.transaction(CONFIG.STORE_REC);
+    const newer = await tx.store.index('by-date').count(IDBKeyRange.lowerBound(Number(rec.timestamp) || 0, true));
+    await tx.done;
+    return newer;
+}
+
+export async function getRecordingsOlderThan(cutoff) {
+    const bound = Number(cutoff);
+    if (!Number.isFinite(bound)) return [];
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_REC);
+    const rows = [];
+    let cursor = await tx.store.index('by-date').openCursor(IDBKeyRange.upperBound(bound));
+    while (cursor) {
+        rows.push(cursor.value);
+        cursor = await cursor.continue();
+    }
+    await tx.done;
+    return rows;
+}
+
 let _storageTotal = 0;
 let _storageQuota = null;
 let _storageQuotaChecked = false;
@@ -178,7 +396,7 @@ function paintStorage() {
     const full = fmtStorageFullPercent(_storageTotal, _storageQuota);
     if (full === null) {
         const status = _storageQuotaChecked ? 'unavailable' : 'calculating…';
-        el.textContent = `Audio: ${audio} • Available: ${status} • ${status}`;
+        el.textContent = `Audio: ${audio} • Available: ${status}`;
     } else {
         const availableBytes = Math.max(0, _storageQuota - _storageTotal);
         el.textContent = `Audio: ${audio} • Available: ${fmtStorageGigabytes(availableBytes)} • ${full}`;
@@ -204,14 +422,11 @@ async function refreshStorageQuota() {
     paintStorage();
 }
 
-/** Apply a known byte delta and repaint (cheap; used after each WAV chunk add). */
 export function bumpStorage(deltaBytes) {
     _storageTotal = Math.max(0, _storageTotal + (deltaBytes || 0));
     paintStorage();
 }
 
-/** Current audio-bytes total (O(1)). Used by the per-recording storage bars so
-    each bar can be sized as a fraction of everything stored. */
 export function getStorageTotal() { return _storageTotal; }
 
 export async function requestPersistentStorage() {
@@ -231,91 +446,43 @@ export async function requestPersistentStorage() {
     return persistent;
 }
 
-/** Authoritative full recount (used on load and after deletes/finalize). */
 export async function calcTotalStorage() {
-    const db = await dbPromise;
-    let total = 0;
-    let c1 = await db.transaction(CONFIG.STORE_REC).store.openCursor();
-    while (c1) { total += c1.value.blob?.size || 0; c1 = await c1.continue(); }
-    for (const store of audioStoreNames(db)) {
-        let c2 = await db.transaction(store).store.openCursor();
-        while (c2) { total += c2.value.blob?.size || 0; c2 = await c2.continue(); }
-    }
+    const db = await database();
+    let total = await audioBytesTotal();
+    let c2 = await db.transaction(CONFIG.STORE_FRAGMENTS).store.openCursor();
+    while (c2) { total += Number(c2.value && c2.value.bytes) || 0; c2 = await c2.continue(); }
     _storageTotal = total;
     paintStorage();
     await refreshStorageQuota();
 }
-// Expose globally for delegated action handlers
 window.calcTotalStorage = calcTotalStorage;
 
-/**
- * Sweep audio fragments left behind if the tab died between finalize's master-blob
- * put and its chunk delete (the two are separate steps to keep audio safe: a
- * crash there wastes storage but never loses data). Any recording that already
- * has a finalized blob should own zero chunks, so we drop strays on startup.
- */
 export async function cleanupOrphanWavChunks() {
-    const db = await dbPromise;
+    const db = await database();
     let swept = false;
 
-    for (const store of audioStoreNames(db)) {
-        const tx = db.transaction(store);
-        const recIds = [];
-        let cur = await tx.store.index('by-rec').openKeyCursor(null, 'nextunique');
-        while (cur) { recIds.push(cur.key); cur = await cur.continue(); }
-        await tx.done;
+    const tx = db.transaction(CONFIG.STORE_FRAGMENTS);
+    const recIds = [];
+    let cur = await tx.store.index('by-rec').openKeyCursor(null, 'nextunique');
+    while (cur) { recIds.push(cur.key); cur = await cur.continue(); }
+    await tx.done;
 
-        for (const id of recIds) {
-            const rec = await dbExec(CONFIG.STORE_REC, 'get', id);
-            // Rows without an owning recording cannot be played or finalized and
-            // are safe to delete. A finalized row may discard only the fragments
-            // from its own capture session, never another isolated session.
-            if (!rec || (rec.blob && !rec.processing)) {
-                const txDelete = db.transaction(store, 'readwrite');
-                let fragment = await txDelete.store.index('by-rec').openCursor(id);
-                while (fragment) {
-                    const row = fragment.value;
-                    const matches = !rec || (rec.sessionId ? row.sessionId === rec.sessionId : !row.sessionId);
-                    if (matches) await fragment.delete();
-                    fragment = await fragment.continue();
-                }
-                await txDelete.done;
-                swept = true;
+    for (const id of recIds) {
+        const rec = await dbExec(CONFIG.STORE_REC, 'get', id);
+        if (!rec || (rec.audioBytes > 0 && !rec.processing)) {
+            const txDelete = db.transaction(CONFIG.STORE_FRAGMENTS, 'readwrite');
+            let fragment = await txDelete.store.index('by-rec').openCursor(id);
+            while (fragment) {
+                const row = fragment.value;
+                const matches = !rec || (rec.sessionId ? row.sessionId === rec.sessionId : !row.sessionId);
+                if (matches) await fragment.delete();
+                fragment = await fragment.continue();
             }
+            await txDelete.done;
+            swept = true;
         }
     }
     if (swept) await calcTotalStorage();
 }
 
-/**
- * One-time migration: give stable ids to legacy transcripts/summaries that have
- * none, and PERSIST them. The render path also backfills, but did so without
- * writing back, so id-less legacy items got a fresh (different) id on every
- * paint - their dropdown values churned and they couldn't be deleted. Running
- * this once on load makes those ids permanent.
- *
- * Gated behind a localStorage flag: once we've scanned the store, ids are
- * persisted in the records and every newly-created sub-item gets a uid() at
- * creation, so there's nothing left to migrate. Without the gate this walked the
- * ENTIRE store (every blob handle + all text) on every single launch, forever.
- * The flag is set only after a successful full pass, so a mid-scan failure
- * retries next boot.
- */
-const MIGRATION_FLAG = 'legacy-ids-migrated-v1';
 
-export async function migrateLegacyIds() {
-    if (localStorage.getItem(MIGRATION_FLAG) === '1') return;
-    const recs = await dbExec(CONFIG.STORE_REC, 'getAllFromIndex', { index: 'by-date' });
-    for (const rec of recs) {
-        let changed = false;
-        const allT = rec.transcripts || [];
-        allT.forEach(t => { if (!t.id) { t.id = t.time || uid(); changed = true; } });
-        const allS = rec.summaries || [];
-        allS.forEach(s => {
-            if (!s.id) { s.id = s.time || uid(); changed = true; }
-            if (!s.transcriptId && allT.length) { s.transcriptId = allT[0].id; changed = true; }
-        });
-        if (changed) await dbExec(CONFIG.STORE_REC, 'put', rec);
-    }
-    localStorage.setItem(MIGRATION_FLAG, '1');
-}

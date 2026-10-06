@@ -1,10 +1,8 @@
-/* ==========================================================================
- *  auto-pipeline.js - Post-recording server automation
- *  ========================================================================== */
 import { CONFIG, getSetting } from './config.js';
 import { dbExec, dbUpdate }  from './db.js';
 import { transcribeChunked } from './transcribe.js';
 import { runSummary } from './reply.js';
+import { CANCELLED } from './jobs.js';
 import {
     liveLogClear, replyStreamInit, openLiveLogTab, openReplyStreamTab,
     showLiveStatus, updateLiveStatus, removeLiveStatus
@@ -23,9 +21,10 @@ const isAbort = error => error && error.name === 'AbortError';
 export async function runAutoPipeline(recId) {
     if (getSetting('set-auto-transcribe') !== 'on') {
         await _renderList();
-        return;
+        return 'skipped';
     }
 
+    let outcome = 'done';
     try {
         await dbUpdate(CONFIG.STORE_REC, recId, rec => {
             if (!rec) return null;
@@ -38,7 +37,9 @@ export async function runAutoPipeline(recId) {
 
         if (getSetting('set-auto-reply') === 'on') await runAutoReply(recId);
     } catch (error) {
-        if (!isAbort(error)) {
+        if (isAbort(error)) outcome = CANCELLED;
+        else {
+            outcome = 'failed';
             console.error('Auto pipeline error:', error);
             await dbUpdate(CONFIG.STORE_REC, recId, rec => {
                 if (!rec) return null;
@@ -50,6 +51,7 @@ export async function runAutoPipeline(recId) {
     } finally {
         await _renderList();
     }
+    return outcome;
 }
 
 async function runAutoTranscribe(recId) {
@@ -62,7 +64,7 @@ async function runAutoTranscribe(recId) {
     liveLogClear(recId);
 
     const buttonRow = document.getElementById(`scribe-btns-${recId}`);
-    if (buttonRow) buttonRow.style.display = 'none';
+    if (buttonRow) buttonRow.classList.add('is-hidden');
 
     const filename = getRecFilename(recId);
     showLiveStatus(recId, 'scribe', '📝 Transcribing…',
@@ -82,13 +84,13 @@ async function runAutoTranscribe(recId) {
             button.textContent = '📝 Scribe';
         }
         removeLiveStatus(recId, 'scribe');
-        if (buttonRow) buttonRow.style.display = '';
+        if (buttonRow) buttonRow.classList.remove('is-hidden');
     }
 }
 
 async function runAutoReply(recId) {
     const latestRec = await dbExec(CONFIG.STORE_REC, 'get', recId);
-    const latestTId = (latestRec.transcripts || [])[0]?.id ?? null;
+    const latestTId = ((latestRec && latestRec.transcripts) || [])[0]?.id ?? null;
     if (!latestTId) {
         console.warn('Auto-reply: no transcript for', recId);
         return;
@@ -99,8 +101,7 @@ async function runAutoReply(recId) {
     replyStreamInit(recId);
 
     if (!button) {
-        try { await runSummary(recId, () => {}, latestTId); }
-        catch (error) { if (!isAbort(error)) throw error; }
+        await runSummary(recId, () => {}, latestTId);
         await _renderList();
         return;
     }
@@ -110,7 +111,7 @@ async function runAutoReply(recId) {
     button.classList.add('processing');
 
     const buttonRow = document.getElementById(`reply-btns-${recId}`);
-    if (buttonRow) buttonRow.style.display = 'none';
+    if (buttonRow) buttonRow.classList.add('is-hidden');
     const replyPanel = document.getElementById(`reply-panel-${recId}`);
     const replyWrap  = document.getElementById(`sreply-wrap-${recId}`);
     if (replyPanel && (!replyWrap || replyWrap.style.display === 'none')) replyPanel.style.display = 'none';
@@ -131,15 +132,13 @@ async function runAutoReply(recId) {
                 button.textContent = text;
             }
         }, latestTId);
-    } catch (error) {
-        if (!isAbort(error)) throw error;
     } finally {
         button.textContent = '🧠 Reply';
         button.disabled = false;
         delete button.dataset.busy;
         button.classList.remove('processing');
         removeLiveStatus(recId, 'reply');
-        if (buttonRow) buttonRow.style.display = '';
+        if (buttonRow) buttonRow.classList.remove('is-hidden');
         if (replyPanel) replyPanel.style.display = '';
     }
     await _renderList();

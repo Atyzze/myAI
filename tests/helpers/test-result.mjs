@@ -1,4 +1,3 @@
-/** Machine-readable test result marker consumed by tests/run-baseline.mjs. */
 export const TEST_RESULT_PREFIX = 'MYAI_TEST_RESULT ';
 
 export function emitTestResult(suite, status, details = {}) {

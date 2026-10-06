@@ -1,7 +1,3 @@
-/* Worker-side harness that loads the real recording-lock.js in an isolated JS
- * realm. Workers share a synchronous file-backed localStorage, while the parent
- * supplies a Web Locks broker when mode === 'web-locks'.
- */
 import fs from 'node:fs';
 import { parentPort, workerData } from 'node:worker_threads';
 

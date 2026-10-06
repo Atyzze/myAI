@@ -1,0 +1,33 @@
+# Storage
+
+myAI stores durable application data in IndexedDB under `voice-notes-db`.
+
+The database is at schema version 13. Version 13 added one small store, `capture_beats`, for the three-second recording heartbeat. Version 12 added one index, `by-state` on `captureState`, so startup finds interrupted recordings without reading every recording. A schema change is additive: the upgrade transaction creates the stores and indexes of the current layout that are missing and never deletes a store, so installing a new version keeps every stored recording, transcript and reply. Stores left by builds before 109 are neither read nor deleted.
+
+The current stores are:
+
+- `recordings` — lightweight recording metadata and generated text metadata;
+- `audio` — finalized master audio, keyed by recording id;
+- `audio_fragments` — bounded in-progress capture fragments, indexed by recording, session and sequence;
+- `live_transcripts` — live transcript state, keyed by recording id;
+- `capture_beats` — one small record per recording in progress (owner, session, heartbeat time, length so far, and the capture error and missing audio if it met one), rewritten every three seconds.
+
+A recording in progress proves it is alive with its beat. Its row, which can carry large context items, is rewritten only when its state changes, once a minute, and before it is finalized; every check of whether a recording is still live reads the row and its beat together, and a beat only counts for the tab and session that own the row. Recovery takes the recording's length from its beat, and a recording's beat is removed once it is saved. Recovery runs at startup, and also in any tab that stays open: soon after another tab's recording lease disappears, and every minute, it finalizes a recording whose beat has gone quiet (a failed save is retried only at startup or by hand).
+
+Recording rows do not contain master audio blobs or inline live transcripts. Master audio is only ever written together with its row, in one transaction over both stores, and audio that no row owns is removed at startup. `audioBytes` and `liveTranscriptLines` are lightweight metadata used when list, retention and storage code needs to reason about those separate stores without loading their contents.
+
+During recording, bounded fragments are committed as capture progresses. At stop, the master recording is finalized before its fragments are removed. This ordering deliberately prefers recoverability over pretending the browser is an in-memory recorder. Once one fragment cannot be stored, the later ones stay in memory and are offered for download at Stop, so the stored fragments are always an unbroken beginning of the recording. A beat is removed only once its recording is finalized or marked as failed, so recovery after a full disk still knows how long the recording was and that it is incomplete. A recording whose finalization failed can still be downloaded, and backed up, as the audio its fragments hold.
+
+While recording with live transcription, the live transcript is saved to `live_transcripts` when it has changed and either five minutes passed, or a minute passed and it grew by a quarter (at least 4,000 characters) since the last save; Stop always saves it whole. Startup reads only the keys of that store to find transcripts no recording owns. A live window waiting in the offline queue keeps only the WAV it will send once newer windows are queued, so the queue's 96 MB cap is the memory it holds.
+
+An Opus recording is as long as its file: the time of the last block in its last Cluster. Pieces saved by a tab that was closed or killed end partway into the next block; recovery ends the file at the last complete block, so it still gets its duration and seek index.
+
+Audio retention and text retention use independent clocks. A recording's clocks start when it ended, by the wall clock: a recording saved by Build 128 or later carries `endedAt`, its last heartbeat when it was stopped or recovered, and an older one ends at its start plus its length. So a recording longer than the audio window, or one that saved less audio than it ran for, is not already expired when it is stopped. Browser quota/eviction remains outside the application's control, so anything that must survive browser/site-data loss should be exported.
+
+A version-change request cannot take the database connection away from a tab that is still writing: recording, saving a recording, doing the automatic work a stopped recording starts, or running a transcription, reply or conversion. That tab gives the connection up by itself as soon as it is idle, and the waiting version then starts.
+
+A transcript saved from the live transcript (source `L`) marks the stretches the live transcript never heard as `[not transcribed live]` and records how many there are in `holes` (Build 134); its live lines carry their speaker in `speakerLabel` as well as in front of their text. Neither field is needed to read older rows.
+
+The live transcript stored beside a recording is kept while a transcript made from it (source `L`, or marked `fromLive`) is kept. Deleting the last such transcript, or a cleanup pass replacing the live reading, deletes it and clears `liveTranscriptLines`. A backup carries a live transcript only when a transcript still shows it, or when it is the recording's only text.
+
+Deleting a recording marks it `deleting` and then removes its pieces, audio, live transcript and row, all while holding the recording lock. So that a tab closed half way through leaves nothing behind, the id is noted in `localStorage` under `myai-deletions-in-progress-v1` from before the mark until the deletion ends. At startup and in the minute sweep, a tab that holds the recording lock finishes every noted recording, and every one it saw in the list, that is still marked `deleting`, unless another tab is still capturing it; a note for a recording that is not marked is dropped.

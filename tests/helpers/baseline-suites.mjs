@@ -1,11 +1,15 @@
-/** Ordered test suites that define the v25 compatibility baseline. */
 export const BASELINE_SUITES = Object.freeze([
     { id: 'pure', timeoutMs: 30000, command: ['node', 'tests/unit/pure.test.mjs'], tier: 'unit', required: true },
+    { id: 'translate-request', timeoutMs: 30000, command: ['node', 'tests/unit/translate-request.test.mjs'], tier: 'unit', required: true },
     { id: 'transcript-core', timeoutMs: 30000, command: ['node', 'tests/unit/core.test.mjs'], tier: 'unit', required: true },
     { id: 'recording-lock-unit', timeoutMs: 30000, command: ['node', 'tests/unit/recording-lock.test.mjs'], tier: 'unit', required: true },
     { id: 'webm-remux-unit', timeoutMs: 30000, command: ['node', 'tests/unit/webm-duration.test.mjs'], tier: 'unit', required: true },
     { id: 'live-view-unit', timeoutMs: 30000, command: ['node', 'tests/unit/live-view.test.mjs'], tier: 'unit', required: true },
     { id: 'platform-unit', timeoutMs: 30000, command: ['node', 'tests/unit/platform.test.mjs'], tier: 'unit', required: true },
+    { id: 'live-scribe-unit', timeoutMs: 60000, command: ['node', 'tests/unit/live-scribe.test.mjs'], tier: 'unit', required: true },
+    { id: 'saved-transcripts', timeoutMs: 60000, command: ['node', 'tests/unit/saved-transcripts.test.mjs'], tier: 'unit', required: true },
+    { id: 'storage-paths', timeoutMs: 60000, command: ['node', 'tests/unit/storage-paths.test.mjs'], tier: 'unit', required: true },
+    { id: 'app-behaviour', timeoutMs: 60000, command: ['node', 'tests/unit/app-behaviour.test.mjs'], tier: 'unit', required: true },
     { id: 'service-worker', timeoutMs: 30000, command: ['node', 'tests/unit/sw-routing.test.mjs'], tier: 'unit', required: true },
     { id: 'baseline-runner-unit', timeoutMs: 30000, command: ['node', 'tests/unit/baseline-runner.test.mjs'], tier: 'unit', required: true },
     { id: 'baseline-contract', timeoutMs: 30000, command: ['node', 'tests/unit/baseline-contract.test.mjs'], tier: 'contract', required: true },
@@ -14,5 +18,7 @@ export const BASELINE_SUITES = Object.freeze([
     { id: 'multitab-realms', timeoutMs: 60000, command: ['node', 'tests/integration/multitab-integration.mjs'], tier: 'integration', required: true },
     { id: 'webm-desktop', timeoutMs: 60000, command: ['node', 'tests/integration/webm-player-integration.mjs'], tier: 'integration', required: true, external: 'ffmpeg+ffprobe' },
     { id: 'browser-lifecycle', timeoutMs: 120000, command: ['node', 'tests/integration/browser-integration.mjs'], tier: 'integration', required: true, external: 'Chromium' },
-    { id: 'mutation-guards', timeoutMs: 120000, command: ['node', 'tests/mutation/mutation-smoke.mjs'], tier: 'mutation', required: true }
+    { id: 'user-journeys', timeoutMs: 180000, command: ['node', 'tests/integration/journeys-integration.mjs'], tier: 'integration', required: true, external: 'Chromium' },
+    { id: 'shell-update', timeoutMs: 120000, command: ['node', 'tests/integration/shell-update-integration.mjs'], tier: 'integration', required: true, external: 'Chromium' },
+    { id: 'mutation-guards', timeoutMs: 600000, command: ['node', 'tests/mutation/mutation-smoke.mjs'], tier: 'mutation', required: true }
 ]);
