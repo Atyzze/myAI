@@ -42,6 +42,10 @@ Speaker naming is deliberately confirm-before-apply. When conversation evidence 
 
 The 📋 button beside Start Recording begins a recording that carries the clipboard's text as context. A pasted note becomes an ordinary context item on the recording, so it is shown, fed to the AI, exported, retained and deleted on exactly the same terms as context carried over from an earlier recording. Oversized pastes are capped rather than sent whole.
 
+## Reading an opened text hands-free
+
+An opened reply, transcript or context item can scroll by itself, for reading it aloud while recording. ▶ at the bottom right starts and pauses it; the speed button beside it opens a popup with a slider and - and + to set how many lines a minute go by. A finger or the mouse on the text holds it still, scrolling by hand moves the reading position and it carries on from there, and it stops at the end; ▶ there starts again from the top. The speed is remembered in this browser. The controls work the same in the in-page view and in a pop-up window. Live views, which follow their own growing text, have none.
+
 ## AI model
 
 Settings contains one AI model selector. The selected Ollama-compatible model is used for both replies and live translation. The default is `qwen3.8:27b`; a model already chosen in this browser takes precedence, and when the server does not have the chosen model the app falls back to one it does have. Build 109 intentionally removed the separate translation-model choice: one model can do both jobs, and sharing it avoids unnecessary model swaps and conflicting configuration. Since Build 119 every request also asks for the same context size, so translation, the preload and ordinary replies never make the server reload the model; only a reply whose prompt does not fit, such as one for a recording of more than about 50 minutes, asks for the larger context. Live transcription with translation boxes loads the model as it starts. Translation speed is measured from the server's own generation time and is shown in the translation box headings, never in the transcript.

@@ -2006,6 +2006,19 @@
       "suites": [
         "user-journeys"
       ]
+    },
+    {
+      "id": "AUTOSCROLL-OPENED-TEXT-001",
+      "title": "An opened reply, transcript or context item scrolls by itself on request: play starts and pauses, a speed button opens a popup to set lines a minute, scrolling by hand is followed rather than fought, and it stops at the end, in the page and in a pop-up window",
+      "suites": [
+        "pure",
+        "browser-lifecycle",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-AUTOSCROLL-FIGHTS-READER",
+        "MUT-AUTOSCROLL-PAST-END"
+      ]
     }
   ],
   "untestedModules": []

@@ -1,6 +1,7 @@
 import { escapeHtml } from './config.js';
 import { openInlineLiveView, inlineLiveViewKey } from './live-inline.js';
 import { createLiveLogRenderer, createReplyRenderer } from './live-render.js';
+import { attachAutoScroll } from './autoscroll.js';
 
 const READY_POLL_MS   = 80;
 const READY_TIMEOUT_MS = 15000;
@@ -265,6 +266,23 @@ function finishedLogEntry({ text, charCount }) {
   };
 }
 
+// An opened text that is finished (a saved reply, transcript or context item) can be read hands-free:
+// auto-scroll controls float over it. Live views follow their own growing text instead.
+function savedViewControls({ doc, panel, scroller, footer, textEl }) {
+  return attachAutoScroll({
+    doc, scroller, textEl, host: panel,
+    bottomOffset: (footer && footer.offsetHeight ? footer.offsetHeight : 0) + 12
+  });
+}
+
+function savedPopupControls(win, elements) {
+  const scroller = elements.replyEl || elements.transcriptEl;
+  return attachAutoScroll({
+    doc: elements.doc, win, scroller, textEl: scroller, host: elements.doc.body, fixed: true,
+    bottomOffset: (elements.footerEl && elements.footerEl.offsetHeight ? elements.footerEl.offsetHeight : 0) + 12
+  });
+}
+
 function openSavedView({ key, windowName, kind, label, entry }) {
   const snapshot = kind === 'replystream' ? replyStreamSnapshot : liveLogSnapshot;
   const openInline = () => openInlineLiveView({
@@ -275,7 +293,8 @@ function openSavedView({ key, windowName, kind, label, entry }) {
     subscribe: onMessage => {
       for (const msg of snapshot(entry)) onMessage(msg);
       return () => {};
-    }
+    },
+    decorate: savedViewControls
   });
 
   if (prefersInlineView()) return openInline();
@@ -283,7 +302,7 @@ function openSavedView({ key, windowName, kind, label, entry }) {
   const win = openLiveWindow(windowName || key, html);
   if (!win) return canRenderInline() ? openInline() : null;
   try { win.focus(); } catch (_) {}
-  driveWindow(win, entry, kind, snapshot, canRenderInline() ? openInline : null);
+  driveWindow(win, entry, kind, snapshot, canRenderInline() ? openInline : null, savedPopupControls);
   return win;
 }
 
@@ -424,7 +443,7 @@ function rendererFor(win, kind, elements) {
 
 const _driving = new WeakMap();
 
-function driveWindow(win, entry, kind, snapshot, openInstead = null) {
+function driveWindow(win, entry, kind, snapshot, openInstead = null, decorate = null) {
   const deadline = Date.now() + READY_TIMEOUT_MS;
   const drive = {};
   _driving.set(win, drive);
@@ -453,6 +472,9 @@ function driveWindow(win, entry, kind, snapshot, openInstead = null) {
     const renderer = rendererFor(win, kind, elements);
     for (const msg of snapshot(entry)) renderer.handle(msg);
     attachWindowRenderer(entry, win, elements.doc, renderer);
+    if (decorate) {
+      try { decorate(win, elements); } catch (err) { console.warn('Live view popup controls could not be added:', err); }
+    }
   };
   start();
 }

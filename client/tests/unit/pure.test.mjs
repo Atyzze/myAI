@@ -4514,6 +4514,49 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
        'describeBox: says plainly what a small box does not do');
 }
 
+
+{
+    // Build 136: auto-scroll for an opened reply, transcript or context item.
+    const { clampSpeed, stepSpeed, lineHeightPx, pxPerSecond, describeSpeed, startPosition, nextScroll,
+            SPEED_MIN, SPEED_MAX, SPEED_DEFAULT, MAX_FRAME_MS }
+        = await import('../../src/js/autoscroll-core.js');
+
+    eq([clampSpeed(undefined), clampSpeed('abc'), clampSpeed(0), clampSpeed(999), clampSpeed('33.4')],
+       [SPEED_DEFAULT, SPEED_DEFAULT, SPEED_MIN, SPEED_MAX, 33], 'auto-scroll: a stored speed is read as a whole number in range');
+    eq([stepSpeed(5, +1), stepSpeed(10, +1), stepSpeed(30, +1), stepSpeed(35, -1), stepSpeed(30, -1), stepSpeed(10, -1)],
+       [6, 12, 35, 30, 28, 9], 'auto-scroll: - and + take fine steps at reading speeds and larger ones above');
+    eq([stepSpeed(SPEED_MIN, -1), stepSpeed(SPEED_MAX, +1)], [SPEED_MIN, SPEED_MAX], 'auto-scroll: the steps stop at the ends');
+    let walked = SPEED_MIN, seen = 0;
+    while (walked < SPEED_MAX && seen++ < 200) walked = stepSpeed(walked, +1);
+    let back = walked;
+    while (back > SPEED_MIN && seen++ < 400) back = stepSpeed(back, -1);
+    ok(walked === SPEED_MAX && back === SPEED_MIN, 'auto-scroll: + reaches the fastest speed and - the slowest');
+
+    eq([lineHeightPx('27px', '15px'), lineHeightPx('normal', '20px'), lineHeightPx('', '')], [27, 24, 24],
+       'auto-scroll: line height is read from the text, "normal" as 1.2 times the font');
+    eq(pxPerSecond(20, 27), 9, 'auto-scroll: 20 lines a minute of 27 px lines is 9 px a second');
+    eq(describeSpeed(1), `${SPEED_MIN} lines a minute`, 'auto-scroll: the speed is described in lines a minute');
+
+    eq([startPosition(120, 500), startPosition(499, 500), startPosition(0, 0)], [120, 0, 0],
+       'auto-scroll: play starts where the reader is, or from the top once the text was read to the end');
+
+    let step = nextScroll({ position: 100, scrollTop: 100, maxScroll: 1000, pxPerSec: 30, elapsedMs: 50 });
+    eq([step.position, step.scrollTo, step.atEnd], [101.5, 102, false], 'auto-scroll: a frame moves the text by speed times time');
+    step = nextScroll({ position: 100.4, scrollTop: 100, maxScroll: 1000, pxPerSec: 1, elapsedMs: 16 });
+    ok(step.position > 100.4 && step.scrollTo === 100,
+       'auto-scroll: slow speeds keep the part of a pixel between frames instead of standing still');
+    step = nextScroll({ position: 100, scrollTop: 400, maxScroll: 1000, pxPerSec: 30, elapsedMs: 50 });
+    eq(step.position, 401.5, 'auto-scroll: after the reader scrolled by hand it carries on from where the reader is');
+    step = nextScroll({ position: 100, scrollTop: 100, maxScroll: 1000, pxPerSec: 30, elapsedMs: 60000 });
+    eq(step.position, 100 + 30 * MAX_FRAME_MS / 1000, 'auto-scroll: a late frame does not jump the text ahead');
+    step = nextScroll({ position: 100, scrollTop: 100, maxScroll: 1000, pxPerSec: 30, elapsedMs: 50, holding: true });
+    eq(step.position, 100, 'auto-scroll: a finger on the text holds it still');
+    step = nextScroll({ position: 999, scrollTop: 999, maxScroll: 1000, pxPerSec: 300, elapsedMs: 50 });
+    eq([step.position, step.atEnd], [1000, true], 'auto-scroll: it stops at the end of the text');
+    eq(nextScroll({ position: NaN, scrollTop: 0, maxScroll: 0, pxPerSec: 9, elapsedMs: 16 }).atEnd, true,
+       'auto-scroll: a text that fits on screen is at its end straight away');
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 reported = true;
 if (failed === 0) {

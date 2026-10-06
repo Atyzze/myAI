@@ -1088,6 +1088,81 @@ try {
     ok(copiedMark === '✓' && clipboard === pasted,
        `tapping 📋 puts the whole text on the clipboard, not the shortened preview (${copiedMark}, ${clipboard.length} of ${pasted.length} chars)`);
 
+    journey('On a phone, an opened context item scrolls by itself: ▶ starts and pauses, the speed button opens '
+        + 'a popup to set the speed, Escape closes only that popup, and the controls leave with the view');
+    await app.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 760, deviceScaleFactor: 1, mobile: true });
+    const longContext = Array.from({ length: 220 }, (_, i) => `Line ${i + 1} of a text to read aloud.`).join('\n');
+    const scrollRec = await app.evaluate(`(async () => {
+        localStorage.removeItem('myai-autoscroll-speed');
+        const { dbExec } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');
+        const id = await dbExec(CONFIG.STORE_REC, 'add', { filename: 'read aloud', timestamp: Date.now() + 120000,
+            durationMs: 1000, processing: false, captureState: 'ready', transcripts: [], summaries: [],
+            contextChain: [{ inputText: ${JSON.stringify(longContext)}, outputText: '', text: '[Pasted Note]: x',
+                             label: 'Pasted: script', pasted: true }] });
+        const gui = await import('/src/js/gui.js');
+        gui.resetListToFirstPage();
+        await gui.renderList({ force: true });
+        document.querySelector('#rec-' + id + ' .context-preview').click();
+        return id;
+    })()`, { userGesture: true });
+    await waitFor(app, `!!document.querySelector('.live-inline.open .as-bar .as-play')
+        && document.querySelector('.live-inline.open .live-inline-transcript').textContent.length > 1000`, 10000);
+    const scrollUi = await app.evaluate(`(async () => {
+        const panel = document.querySelector('.live-inline.open .live-inline-panel');
+        const body = panel.querySelector('.live-inline-body');
+        const play = panel.querySelector('.as-play'), speed = panel.querySelector('.as-speed');
+        const bar = panel.querySelector('.as-bar').getBoundingClientRect(), box = panel.getBoundingClientRect();
+        const first = { label: speed.textContent, pressed: play.getAttribute('aria-pressed'),
+                        inside: bar.right <= box.right && bar.bottom <= box.bottom && bar.top >= box.top,
+                        top: document.elementFromPoint(bar.left + 10, bar.top + bar.height / 2)?.closest('.as-bar') !== null };
+        speed.click();
+        const pop = panel.querySelector('.as-pop');
+        const range = pop.querySelector('input[type=range]');
+        const opened = !pop.hidden && speed.getAttribute('aria-expanded') === 'true' && document.activeElement === range;
+        range.value = '120';
+        range.dispatchEvent(new Event('input', { bubbles: true }));
+        return { first, opened, label: speed.textContent, value: pop.querySelector('.as-pop-value').textContent,
+                 stored: localStorage.getItem('myai-autoscroll-speed'), scrollTop: body.scrollTop };
+    })()`, { userGesture: true });
+    ok(scrollUi.first.pressed === 'false' && scrollUi.first.label === '20/min',
+       `the opened text shows ▶ and the speed button, paused at 20 lines a minute (${JSON.stringify(scrollUi.first)})`);
+    ok(scrollUi.first.inside && scrollUi.first.top,
+       `the controls float on top of the text, inside the view (${JSON.stringify(scrollUi.first)})`);
+    ok(scrollUi.opened, 'the speed button opens its popup with the slider ready to move');
+    ok(scrollUi.label === '120/min' && scrollUi.value === '120 lines a minute' && scrollUi.stored === '120',
+       `moving the slider sets the speed at once and remembers it (${scrollUi.label}, ${scrollUi.value}, ${scrollUi.stored})`);
+    await pressKey(app, 'Escape');
+    const afterEscape = await app.evaluate(`({ view: !!document.querySelector('.live-inline.open'),
+        pop: document.querySelector('.live-inline.open .as-pop')?.hidden })`);
+    ok(afterEscape.view && afterEscape.pop === true, `Escape closes the speed popup, not the view (${JSON.stringify(afterEscape)})`);
+    const scrolled = await app.evaluate(`(async () => {
+        const panel = document.querySelector('.live-inline.open .live-inline-panel');
+        const body = panel.querySelector('.live-inline-body'), play = panel.querySelector('.as-play');
+        const max = body.scrollHeight - body.clientHeight;
+        play.click();
+        await new Promise(r => setTimeout(r, 1500));
+        const moved = body.scrollTop, pressed = play.getAttribute('aria-pressed');
+        play.click();
+        const pausedAt = body.scrollTop;
+        await new Promise(r => setTimeout(r, 600));
+        const stillAt = body.scrollTop;
+        body.scrollTop = max - 30;
+        play.click();
+        await new Promise(r => setTimeout(r, 2500));
+        return { max, moved, pressed, pausedAt, stillAt, end: body.scrollTop, endPressed: play.getAttribute('aria-pressed') };
+    })()`, { userGesture: true });
+    ok(scrolled.max > 1000 && scrolled.moved > 30 && scrolled.pressed === 'true',
+       `▶ scrolls the text by itself (${scrolled.moved} px in 1.5 s at 120 lines a minute)`);
+    ok(scrolled.pausedAt === scrolled.stillAt, `pressing it again pauses (${scrolled.pausedAt} then ${scrolled.stillAt})`);
+    ok(scrolled.max - scrolled.end <= 2 && scrolled.endPressed === 'false',
+       `at the end of the text it stops by itself (${scrolled.end} of ${scrolled.max}, pressed ${scrolled.endPressed})`);
+    await app.evaluate(`document.querySelector('.live-inline.open .live-inline-close').click(); true`);
+    const controlsLeft = await app.evaluate(`({ bars: document.querySelectorAll('.as-bar').length,
+        position: document.querySelector('.live-inline-panel').style.position })`);
+    ok(controlsLeft.bars === 0 && controlsLeft.position === '', `closing the view removes the controls (${JSON.stringify(controlsLeft)})`);
+    await app.send('Emulation.clearDeviceMetricsOverride');
+    await app.evaluate(`localStorage.removeItem('myai-autoscroll-speed'); true`);
+
     journey('A background retention sweep in an idle tab never interrupts it');
     await app.evaluate(`(async () => {
         const { dbExec, writeAudio } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');

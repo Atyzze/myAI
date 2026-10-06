@@ -854,6 +854,53 @@ try {
        'and no message was posted to either popup: the opening tab draws into them');
     await appA.client.evaluate('window.__replyWin.close(); window.__logWin.close(); true');
 
+    // An opened saved text gets auto-scroll controls in its pop-up: built and run by this tab, with
+    // no script in the pop-up's page.
+    const longReply = Array.from({ length: 160 }, (_, i) => `Line ${i + 1} of a long saved reply.`).join('\n');
+    const savedOpened = await appA.client.evaluate(`(() => {
+        localStorage.setItem('myai-autoscroll-speed', '120');
+        window.__savedWin = window.__live.openSavedReplyView({ key: 'saved-reply-autoscroll', label: 'scroll.wav',
+            text: ${JSON.stringify(longReply)}, model: 'test', tokenCount: 1, elapsedMs: 1 });
+        return !!window.__savedWin;
+    })()`, { userGesture: true });
+    ok(savedOpened, 'a saved reply opens in a popup window');
+    await waitFor(appA.client, "!!(window.__savedWin && window.__savedWin.document.querySelector('.as-bar .as-play'))"
+        + " && window.__savedWin.document.getElementById('text').textContent.length > 1000", 15000);
+    const savedPopup = await appA.client.evaluate(`(async () => {
+        const doc = window.__savedWin.document;
+        const reply = doc.getElementById('reply');
+        const play = doc.querySelector('.as-play');
+        const speed = doc.querySelector('.as-speed');
+        const before = { scripts: doc.scripts.length, speedLabel: speed.textContent, pressed: play.getAttribute('aria-pressed'),
+                         max: reply.scrollHeight - reply.clientHeight };
+        speed.click();
+        const popupShown = !doc.querySelector('.as-pop').hidden;
+        doc.querySelector('.as-slower').click();
+        const slowerLabel = speed.textContent;
+        doc.querySelector('.as-faster').click();
+        play.click();
+        const startedAt = reply.scrollTop;
+        await new Promise(r => setTimeout(r, 1500));
+        const moved = reply.scrollTop;
+        play.click();
+        const pausedAt = reply.scrollTop;
+        await new Promise(r => setTimeout(r, 500));
+        return { before, popupShown, slowerLabel, startedAt, moved, pausedAt, afterPause: reply.scrollTop,
+                 pressedAfter: play.getAttribute('aria-pressed'), stored: localStorage.getItem('myai-autoscroll-speed') };
+    })()`, { userGesture: true });
+    ok(savedPopup.before.scripts === 0, `the popup page still has no script of its own (${savedPopup.before.scripts})`);
+    ok(savedPopup.before.speedLabel === '120/min' && savedPopup.before.pressed === 'false',
+       `the controls show the remembered speed and start paused (${JSON.stringify(savedPopup.before)})`);
+    ok(savedPopup.popupShown && savedPopup.slowerLabel === '115/min',
+       `the speed button opens its popup, and - slows down (${savedPopup.popupShown}, ${savedPopup.slowerLabel})`);
+    ok(savedPopup.before.max > 0 && savedPopup.startedAt === 0,
+       `a text opened at its end starts again from the top (${savedPopup.startedAt}, can scroll ${savedPopup.before.max})`);
+    ok(savedPopup.moved > 20, `▶ scrolls the text in the popup by itself (${savedPopup.moved} px in 1.5 s)`);
+    ok(savedPopup.afterPause === savedPopup.pausedAt && savedPopup.pressedAfter === 'false',
+       `pressing it again pauses (${savedPopup.pausedAt} then ${savedPopup.afterPause})`);
+    ok(savedPopup.stored === '120', `the speed chosen is remembered for the next opened text (${savedPopup.stored})`);
+    await appA.client.evaluate('window.__savedWin.close(); localStorage.removeItem("myai-autoscroll-speed"); true');
+
     const audioImport = JSON.stringify(new URL('src/js/audio.js', rootUrl).href);
     const pipelineImport = JSON.stringify(new URL('src/js/auto-pipeline.js', rootUrl).href);
     const resampleImport = JSON.stringify(new URL('src/js/resample-core.js', rootUrl).href);

@@ -66,7 +66,7 @@ function clear(node) {
     if (node) node.textContent = '';
 }
 
-export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
+export function openInlineLiveView({ key, kind, title, accent, subscribe, decorate = null }) {
     if (_open && _open.key === key) return _open.handle;
     if (_open) closeInlineLiveView();
 
@@ -128,8 +128,21 @@ export function openInlineLiveView({ key, kind, title, accent, subscribe }) {
 
     const unsubscribe = subscribe(onMessage);
 
+    // Extra controls a caller lays over this view (auto-scroll on an opened text); removed on close.
+    let undecorate = null;
+    if (typeof decorate === 'function') {
+        try {
+            undecorate = decorate({
+                doc: document, panel, scroller: body, footer,
+                textEl: body.firstChild || body
+            });
+        } catch (error) {
+            console.warn('Live view controls could not be added:', error);
+        }
+    }
+
     const handle = { key, close: () => closeInlineLiveView() };
-    _open = { key, unsubscribe, overlay, returnFocus, onKeyDown, handle };
+    _open = { key, unsubscribe, overlay, returnFocus, onKeyDown, handle, undecorate };
     return handle;
 }
 
@@ -139,6 +152,7 @@ export function closeInlineLiveView() {
     _open = null;
 
     try { current.unsubscribe?.(); } catch (_) {}
+    try { current.undecorate?.(); } catch (_) {}
     try { document.removeEventListener('keydown', current.onKeyDown); } catch (_) {}
     current.overlay.className = 'live-inline';
     current.overlay.setAttribute('aria-hidden', 'true');

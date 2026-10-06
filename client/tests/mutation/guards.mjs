@@ -3614,4 +3614,20 @@ export const mutations = [
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /every setting lies inside the range Web Audio accepts/
     },
+    {
+        id: 'MUT-AUTOSCROLL-FIGHTS-READER',
+        file: 'src/js/autoscroll-core.js',
+        from: '    if (Math.abs(actual - exact) > USER_MOVED_PX) exact = actual;',
+        to: '    if (Math.abs(actual - exact) > USER_MOVED_PX * 1000) exact = actual;',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /carries on from where the reader is/
+    },
+    {
+        id: 'MUT-AUTOSCROLL-PAST-END',
+        file: 'src/js/autoscroll-core.js',
+        from: '    exact = Math.min(max, Math.max(0, exact));',
+        to: '    exact = Math.max(0, exact);',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /it stops at the end of the text/
+    },
 ];
