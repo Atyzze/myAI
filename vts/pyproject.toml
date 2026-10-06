@@ -1,0 +1,31 @@
+[project]
+name = "vts-server"
+version = "0.0.22"
+description = "VTS (Voice Transcribe Server): privacy-oriented in-memory Whisper transcription service"
+requires-python = "==3.12.*"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.4",
+  "faster-whisper==1.2.1",
+  "huggingface-hub==1.31.0",
+  "numpy==2.2.6",
+  "nvidia-cublas-cu12>=12,<13",
+  "nvidia-cudnn-cu12==9.*",
+]
+
+[project.optional-dependencies]
+diarization = [
+  "speechbrain==1.1.0",
+  "hyperpyyaml==1.2.3",
+  "torch>=2.5,<3",
+  "torchaudio>=2.5,<3",
+]
+
+[tool.vts]
+python-runtime = "3.12"
+bootstrap = "uv"
+build-file = "BUILD_NUMBER"
+installer = "install.py"
+runtime = "server.py"
+request-format = "pcm-s16le-wav-16000-mono"
+content-persistence = "none"

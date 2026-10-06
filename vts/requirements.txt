@@ -1,0 +1,13 @@
+# VTS runtime is intentionally pinned to CPython 3.12.x. install.py permits
+# binary wheels only; sdists/source builds are a deployment error.
+# Runtime + installation-time model downloader. No python-multipart: /transcribe
+# accepts a raw WAV request body and never uses UploadFile/form parsing.
+fastapi==0.141.1
+uvicorn==0.52.4
+faster-whisper==1.2.1
+huggingface-hub==1.31.0
+numpy==2.2.6
+# faster-whisper/CTranslate2 GPU runtime on Linux. The host still needs a working
+# NVIDIA driver (`nvidia-smi`); these are user-space CUDA 12 libraries only.
+nvidia-cublas-cu12>=12,<13
+nvidia-cudnn-cu12==9.*

@@ -1,0 +1,12 @@
+# Optional dependencies for the fixed CPython 3.12.x VTS runtime. The installer
+# accepts binary wheels only and will never compile these packages from source.
+# Optional speaker embeddings.
+speechbrain==1.1.0
+hyperpyyaml==1.2.3
+# torch shares one process with CTranslate2, which uses the CUDA 12 libraries.
+# torch 2.10 is the last PyPI release built for CUDA 12; from 2.11 PyPI wheels
+# are CUDA 13 and their nvidia-cudnn-cu13 overwrites the CUDA 12 cuDNN files
+# (same nvidia/cudnn/lib path), which stops the service from starting.
+# torchaudio must be the same version as torch. install.py verifies both.
+torch==2.10.0
+torchaudio==2.10.0
