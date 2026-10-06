@@ -15,6 +15,9 @@ The response is JSON and carries no-store cache headers. Important fields:
     transport_security: "tls" | "plaintext"
     input: "pcm_s16le_wav_16000_mono"
     max_body_bytes: <integer>
+    device: "cuda" | "cpu"          (resolved, after DEVICE=auto)
+    compute_type: <string>          (for example float16 or int8)
+    model: <string>                 (name of the Whisper model folder)
 
 The installer uses these fields as part of deployment verification. Managed
 installs require `transport_security: "tls"` unless the operator explicitly used

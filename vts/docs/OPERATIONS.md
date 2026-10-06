@@ -224,6 +224,12 @@ A complete clean reinstall is explicit and destructive to installed assets:
 documents supported values. The environment file is read after generated unit
 defaults, so uncommented values override them.
 
+`DEVICE` defaults to `auto`: CUDA when CTranslate2 sees a CUDA device, otherwise
+the CPU with `int8`, so a box without an NVIDIA GPU still transcribes, only more
+slowly. Set `DEVICE=cuda` to insist on the GPU (startup then fails without one)
+or `DEVICE=cpu` to keep the GPU free. Speaker embeddings follow Whisper onto CUDA
+only when torch can use CUDA as well; `EMBED_DEVICE` overrides that.
+
 After an edit:
 
     python3 install.py restart

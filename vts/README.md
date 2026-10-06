@@ -113,6 +113,16 @@ latency, and non-content error class. It is the intended place to inspect abuse
 and build external rate-limiting rules. Audio, transcript text and speaker
 embeddings are not logged.
 
+## Packaged runtime
+
+`install.py` is the supported way to run VTS on an ordinary Linux host. The
+myAI box image (the Nix flake at the repository root) packages VTS with its own
+interpreter instead and starts `server.py` with `VTS_SYSTEM_PYTHON=1`, which
+skips the `.venv` switch and the venv CUDA library bootstrap. Everything else,
+including the in-memory request path and the no-store responses, is the same
+code. On that image the Whisper model, device and compute type are chosen at
+boot from the hardware that is present.
+
 ## API in one screen
 
     POST /transcribe

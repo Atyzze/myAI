@@ -61,15 +61,20 @@ os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
 os.environ["CUDA_CACHE_DISABLE"] = "1"
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
+# A packaged runtime (the Nix box image) supplies its own interpreter with every
+# dependency already on the path, and sets VTS_SYSTEM_PYTHON=1 so that neither
+# the .venv switch nor the venv CUDA library bootstrap below applies.
+SYSTEM_PYTHON = os.environ.get("VTS_SYSTEM_PYTHON", "0").strip().lower() in {"1", "true", "yes", "on"}
+
 # Running ./server.py or python3 server.py automatically switches to .venv.
-if Path(sys.prefix).resolve() != VENV.resolve():
+if not SYSTEM_PYTHON and Path(sys.prefix).resolve() != VENV.resolve():
     if not VENV_PYTHON.is_file():
         raise SystemExit("Run python3 install.py once before starting the server.")
     env = os.environ.copy()
     os.execve(str(VENV_PYTHON), [str(VENV_PYTHON), str(__file__), *sys.argv[1:]], env)
 
 # Expose CUDA libraries installed inside the venv before importing CTranslate2.
-if os.environ.get("VTS_SERVER_BOOTSTRAPPED") != "1":
+if not SYSTEM_PYTHON and os.environ.get("VTS_SERVER_BOOTSTRAPPED") != "1":
     nvidia = Path(sysconfig.get_paths()["purelib"]) / "nvidia"
     cuda_libs = [str(path) for path in nvidia.glob("*/lib*") if path.is_dir()]
     if cuda_libs:
@@ -84,8 +89,11 @@ FALSE_VALUES = {"0", "false", "no", "off"}
 
 HOST = os.getenv("VTS_BIND_HOST") or os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("VTS_BIND_PORT") or os.getenv("PORT", "4444"))
-DEVICE = os.getenv("DEVICE", "cuda")
-COMPUTE_TYPE = os.getenv("COMPUTE_TYPE", "float16" if DEVICE == "cuda" else "int8")
+# DEVICE=auto (the default) uses CUDA when CTranslate2 sees a CUDA device and the
+# CPU otherwise, so the same server runs on a GPU box and on a laptop. COMPUTE_TYPE
+# follows the resolved device unless it is set: float16 on CUDA, int8 on the CPU.
+DEVICE_REQUESTED = os.getenv("DEVICE", "auto").strip().lower() or "auto"
+COMPUTE_TYPE_REQUESTED = os.getenv("COMPUTE_TYPE", "").strip()
 SAMPLE_RATE = 16000
 MAX_BODY_MB = float(os.getenv("MAX_BODY_MB", "8"))
 MAX_BODY_BYTES = int(MAX_BODY_MB * 1024 * 1024)
@@ -160,7 +168,10 @@ for _key in ("TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME"):
     os.environ[_key] = str(RAM_TMP_DIR)
 
 
-REQUIRED = ("model.bin", "config.json", "tokenizer.json", "preprocessor_config.json")
+# preprocessor_config.json only exists for the large-v3 family (128 mel bins);
+# faster-whisper falls back to 80 bins without it, which is what the smaller
+# models use, so it is not required.
+REQUIRED = ("model.bin", "config.json", "tokenizer.json")
 missing = [name for name in REQUIRED if not (MODEL_DIR / name).is_file()]
 if missing:
     raise RuntimeError(f"Incomplete model directory {MODEL_DIR}; missing: {', '.join(missing)}")
@@ -172,6 +183,30 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from faster_whisper import WhisperModel
+
+
+def resolve_device(requested: str, cuda_devices: int) -> str:
+    if requested == "auto":
+        return "cuda" if cuda_devices > 0 else "cpu"
+    if requested not in ("cuda", "cpu"):
+        raise RuntimeError(f"DEVICE must be auto, cuda or cpu, not {requested!r}")
+    return requested
+
+
+def default_compute_type(device: str) -> str:
+    return "float16" if device == "cuda" else "int8"
+
+
+def _cuda_device_count() -> int:
+    try:
+        import ctranslate2
+        return int(ctranslate2.get_cuda_device_count())
+    except Exception:
+        return 0
+
+
+DEVICE = resolve_device(DEVICE_REQUESTED, _cuda_device_count() if DEVICE_REQUESTED != "cpu" else 0)
+COMPUTE_TYPE = COMPUTE_TYPE_REQUESTED or default_compute_type(DEVICE)
 
 
 NO_STORE_HEADERS = {
@@ -295,7 +330,7 @@ def resolve_tls():
     return str(cert), str(key)
 
 
-log.info("event=model_loading device=%s compute=%s", DEVICE, COMPUTE_TYPE)
+log.info("event=model_loading device=%s requested=%s compute=%s", DEVICE, DEVICE_REQUESTED, COMPUTE_TYPE)
 model = WhisperModel(
     str(MODEL_DIR),
     device=DEVICE,
@@ -362,6 +397,25 @@ class DirectEcapaEmbedder:
                     pass
 
 
+def embedding_device(whisper_device: str) -> str:
+    """Speaker embeddings follow Whisper onto CUDA only when torch can use it too.
+
+    A CPU-only torch build next to a CUDA CTranslate2 is a valid combination (the
+    box image ships exactly that), so the embedder falls back to the CPU instead
+    of failing. EMBED_DEVICE overrides the choice.
+    """
+    explicit = os.getenv("EMBED_DEVICE", "").strip().lower()
+    if explicit:
+        return explicit
+    if whisper_device != "cuda":
+        return "cpu"
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 embedder = None
 embedder_error = None
 if DIARIZE not in FALSE_VALUES:
@@ -370,7 +424,7 @@ if DIARIZE not in FALSE_VALUES:
             raise FileNotFoundError(
                 f"{EMBED_DIR} not found - run python3 install.py install --with-diarization once"
             )
-        embedder = DirectEcapaEmbedder(EMBED_DIR, DEVICE)
+        embedder = DirectEcapaEmbedder(EMBED_DIR, embedding_device(DEVICE))
         log.info("event=embedding_model_ready backend=DirectEcapaEmbedder")
     except Exception as exc:
         embedder = None
@@ -571,6 +625,9 @@ def health():
         "transport_security": ACTIVE_TRANSPORT,
         "input": "pcm_s16le_wav_16000_mono",
         "max_body_bytes": MAX_BODY_BYTES,
+        "device": DEVICE,
+        "compute_type": COMPUTE_TYPE,
+        "model": MODEL_DIR.name,
     }
     if embedder is None and DIARIZE not in FALSE_VALUES:
         body["diarization_error"] = embedder_error or "disabled"

@@ -1,6 +1,6 @@
 [project]
 name = "vts-server"
-version = "0.0.22"
+version = "0.0.23"
 description = "VTS (Voice Transcribe Server): privacy-oriented in-memory Whisper transcription service"
 requires-python = "==3.12.*"
 dependencies = [
