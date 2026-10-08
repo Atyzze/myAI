@@ -302,7 +302,7 @@ async function deleteAllAudio() {
         return;
     }
     if (!confirmDeletion('Delete ALL saved audio?',
-        'Every recording loses its audio. Transcripts and replies are kept.')) return;
+        'Every recording loses its audio, pinned ones too. Transcripts and replies are kept.')) return;
     if (!await offerBackupFirst()) return;
 
     try {
@@ -359,7 +359,7 @@ async function deleteAllText() {
         return;
     }
     if (!confirmDeletion('Delete ALL transcripts, replies and context chains?',
-        'Audio is kept, but everything written from it goes.')) return;
+        'Audio is kept, but everything written from it goes, in pinned recordings too.')) return;
     if (!await offerBackupFirst()) return;
 
     try {
@@ -813,7 +813,7 @@ function describeSweep(counts, policy) {
     return `Automatic deletion is on.\n\n`
         + `Audio is deleted ${retentionLabel(policy.audio)} after the recording ended. `
         + `Text is deleted ${retentionLabel(policy.text)} after it was generated. `
-        + `There is no "keep forever" setting: browser storage can be cleared at any time, so the only way to keep a recording is to download it.\n\n`
+        + `A pinned recording (📌) is left alone. Browser storage can still be cleared at any time, so the only sure way to keep a recording is to download it.\n\n`
         + `Right now that means removing${since}:\n${lines.join('\n')}\n\n`
         + `Continue? Choosing Cancel leaves everything in place for now and asks again next time you open the app.`;
 }

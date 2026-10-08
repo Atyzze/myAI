@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="138">
+<meta name="myai-build" content="139">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -47,6 +47,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .fmt-convert{border-color:#5a4a20;color:#e0b34d;background:#161006;cursor:pointer}
 .fmt-convert:hover{background:#1e1608;border-color:#8a7430}
 .fmt-convert:disabled{opacity:.75;cursor:progress}
+.rec-top-tools{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.pin-btn{flex-shrink:0;font-size:12px;line-height:15px;padding:4px 8px;border-radius:6px;border:1px solid #333;background:#111;filter:grayscale(1);opacity:.5}
+.pin-btn:hover:not(:disabled){opacity:.85;background:#1a1a1a}
+.pin-btn.pinned{filter:none;opacity:1;border-color:#3d6f99;background:#0a1520}
+.pin-btn.pinned:hover:not(:disabled){background:#0f1d2b}
 
 .rec-player{width:100%}
 .player{display:flex;flex-direction:column;gap:8px;background:#0a0a0d;border:1px solid #2a2a33;border-radius:12px;padding:8px 12px}
@@ -280,6 +285,7 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .rec-expiry{font-family:monospace;font-size:11px;color:#6b6b6b;white-space:nowrap;display:flex;gap:10px}
 .rec-storage + .rec-expiry{margin-left:auto}
 .rec-expiry .soon{color:#e0b34d}
+.rec-expiry.frozen{color:#7fb2d9}
 
 #pagination{margin-top:1em}
 #paginationTop{margin:0 0 1em}
@@ -418,6 +424,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
 
     <h3>⏳ Automatic deletion</h3>
     <p>Audio and text are deleted when they reach the ages set in Settings, one month each by default. Each recording shows the time left, and the first deletion is asked for first.</p>
+    <p><strong>📌</strong>, left of a recording's format, pins it: the time left freezes (❄️) and nothing in it is deleted automatically, however the ages in Settings are changed. Tap 📌 again to unpin it, and the time left runs on from where it stood. A pin does not stop you deleting the recording, and it does not stop the browser clearing its storage; only a download is safe from that.</p>
 
     <h3>🎛️ Buttons</h3>
     <p><strong>📋</strong> beside Start Recording begins a recording that remembers whatever is on the clipboard: the pasted text is attached as context and goes to the AI with the note, exactly like <strong>💬 Continue</strong> does with an earlier recording. If the browser will not hand over the clipboard, or it is empty, a box opens to paste or type into instead, holding up to 100,000 characters with line breaks intact. During a recording, 📋 stays where it is and adds whatever is on the clipboard to that recording as one more context item, so something you find halfway through still reaches the AI reply; the live row says how many items the recording carries. It appears in the note's context block, where it can be inspected or removed: tap its text to read it whole, and the 📋 beside it copies the whole text back to the clipboard.</p>
@@ -605,7 +612,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <div class="settings-row">
       <label class="settings-label" for="set-retention-text">Delete transcripts and replies after</label>
       <select class="settings-select" id="set-retention-text"></select>
-      <div class="settings-hint">Audio ages from when its recording ended, text from when it was generated; a transcript stays as long as a reply written from it does. Nothing is kept forever: download anything you want to keep. A month is 30 days, a year 365.</div>
+      <div class="settings-hint">Audio ages from when its recording ended, text from when it was generated; a transcript stays as long as a reply written from it does. A month is 30 days, a year 365. 📌 beside a recording's format pins it: its countdown freezes and nothing in it is deleted automatically until it is unpinned. The browser can still clear its storage, so download anything you cannot lose.</div>
       <div class="settings-hint settings-warn"><strong>Shortening either window deletes immediately.</strong> These are not rules that only apply to future recordings: choosing 5 minutes means everything older than 5 minutes is overdue the moment you confirm, and the next sweep removes it - months of recordings, in one step, with no undo. You will be shown exactly how many and how far back before anything happens, and offered a backup first; after a backup, nothing is deleted until you confirm the ZIP was saved.</div>
     </div>
     <hr class="settings-divider">

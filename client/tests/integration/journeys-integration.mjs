@@ -364,6 +364,44 @@ try {
         return true;
     })()`);
 
+    journey('📌 left of the format pins a recording and freezes its countdown, and a second tap lets it run on');
+    const pinLayout = [];
+    for (const [width, mobile] of [[0, false], [360, true]]) {
+        if (width) await app.send('Emulation.setDeviceMetricsOverride', { width, height: 800, deviceScaleFactor: 1, mobile });
+        pinLayout.push(await app.evaluate(`(async () => {
+            const gui = await import('/src/js/gui.js');
+            await gui.renderList({ force: true });
+            const row = document.getElementById('rec-${first}');
+            const pin = row.querySelector('.rec-top .pin-btn'), badge = row.querySelector('.rec-top .fmt-badge');
+            if (!pin || !badge) return { missing: true };
+            const p = pin.getBoundingClientRect(), b = badge.getBoundingClientRect(), r = row.getBoundingClientRect();
+            return { width: innerWidth, leftOfBadge: p.right <= b.left + 0.5 && b.left - p.right < 12,
+                     sameRow: Math.abs((p.top + p.bottom) / 2 - (b.top + b.bottom) / 2) < 3,
+                     sameHeight: Math.abs(p.height - b.height) < 3, inside: p.left >= r.left && b.right <= r.right };
+        })()`));
+    }
+    await app.send('Emulation.clearDeviceMetricsOverride');
+    for (const layout of pinLayout) {
+        ok(!layout.missing && layout.leftOfBadge && layout.sameRow && layout.sameHeight && layout.inside,
+           `at ${layout.width} px 📌 sits just left of the format badge, on its row and as tall (${JSON.stringify(layout)})`);
+    }
+    const pinState = `(async () => {
+        const { dbExec } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');
+        const rec = await dbExec(CONFIG.STORE_REC, 'get', ${first});
+        const row = document.getElementById('rec-${first}');
+        const pin = row && row.querySelector('.pin-btn'), expiry = row && row.querySelector('.rec-expiry');
+        return { stored: !!(rec && rec.pinnedAt > 0), pressed: pin ? pin.getAttribute('aria-pressed') : null,
+                 frozen: !!(expiry && expiry.classList.contains('frozen')), countdown: expiry ? expiry.textContent : '' };
+    })()`;
+    await app.evaluate(`document.querySelector('#rec-${first} .pin-btn').click(); true`, { userGesture: true });
+    const pinnedNow = await waitFor(app, `${pinState}.then(s => s.stored && s.pressed === 'true' ? s : null)`, 5000).catch(() => null);
+    ok(pinnedNow && pinnedNow.frozen && /❄️ audio/.test(pinnedNow.countdown) && !/⏳/.test(pinnedNow.countdown),
+       `a tap on 📌 pins the recording and freezes its countdown (${JSON.stringify(pinnedNow)})`);
+    await app.evaluate(`document.querySelector('#rec-${first} .pin-btn').click(); true`, { userGesture: true });
+    const unpinned = await waitFor(app, `${pinState}.then(s => !s.stored && s.pressed === 'false' ? s : null)`, 5000).catch(() => null);
+    ok(unpinned && !unpinned.frozen && /⏳ audio/.test(unpinned.countdown),
+       `a second tap unpins it and its countdown runs again (${JSON.stringify(unpinned)})`);
+
     journey('A conversion that outlives its recording leaves nothing behind');
     const doomed = await record(app, 3, { format: 'wav' });
     await app.evaluate(`localStorage.setItem('set-recording-format', 'opus'); true`);

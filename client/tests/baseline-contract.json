@@ -2040,6 +2040,22 @@
         "MUT-ACCEPTED-SHELL-DELETED",
         "MUT-TAP-DOES-NOT-ACCEPT"
       ]
+    },
+    {
+      "id": "PIN-FREEZES-RETENTION-001",
+      "title": "A recording pinned with 📌, left of its format, keeps everything: its countdown freezes where it stood, no automatic sweep deletes anything in it however short the windows, a tab showing an older state cannot flip the pin, and unpinning lets the countdown run on from where it stood rather than from the wall clock",
+      "suites": [
+        "pure",
+        "app-behaviour",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-PINNED-SWEPT",
+        "MUT-PIN-CLOCK-RUNS",
+        "MUT-PIN-RESUMES-FROM-WALL-CLOCK",
+        "MUT-PIN-TOGGLES-BLIND",
+        "MUT-PIN-RIGHT-OF-FORMAT"
+      ]
     }
   ],
   "untestedModules": []

@@ -750,6 +750,74 @@ await testStitch();
     eq(sweep.counts.oldestAt, now - 40 * DAY,
        'retention: and how far back it reaches');
 
+    const { isPinned, setPinned, retentionAge, PINNED_SPANS_KEPT } = await import('../../src/js/retention-core.js');
+    // Pinned four days after it ended, and held for 96 days since: both clocks stand at four days.
+    const pinnedRec = { id: 20, timestamp: now - 100 * DAY, audioBytes,
+                        transcripts: [{ id: 't1', time: now - 100 * DAY }], pinnedAt: now - 96 * DAY };
+    const frozenNow = planRecordRetention(pinnedRec, opts);
+    const frozenLater = planRecordRetention(pinnedRec, { ...opts, now: now + 50 * DAY });
+    ok(frozenNow.pinned && !retentionPlanTouchesAnything(frozenNow) && !retentionPlanTouchesAnything(frozenLater),
+       'pin: a pinned recording, long past both windows by the wall clock, loses nothing');
+    eq([fmtRetentionRemaining(frozenNow.audioExpiresInMs), fmtRetentionRemaining(frozenNow.textExpiresInMs)], ['26d', '26d'],
+       'pin: its countdowns stand where they were when it was pinned');
+    ok(frozenLater.audioExpiresInMs === frozenNow.audioExpiresInMs && frozenLater.textExpiresInMs === frozenNow.textExpiresInMs,
+       'pin: and stay there for as long as it is pinned');
+    ok(!retentionPlanTouchesAnything(planRecordRetention(pinnedRec, { now, audioMs: 5 * MIN, textMs: 5 * MIN })),
+       'pin: shortening both windows to five minutes still deletes nothing in it');
+    ok(planRetentionSweep([pinnedRec], { now, audioMs: 5 * MIN, textMs: 5 * MIN }).empty,
+       'pin: so a sweep finds nothing to do with it');
+
+    const resumed = { ...pinnedRec, transcripts: [...pinnedRec.transcripts] };
+    ok(setPinned(resumed, false, now) && !isPinned(resumed) && (resumed.pinnedSpans || []).length === 1,
+       'pin: unpinning takes the pin off and keeps the time it was pinned');
+    const afterUnpin = planRecordRetention(resumed, opts);
+    eq(afterUnpin.audioExpiresInMs, frozenNow.audioExpiresInMs,
+       'pin: unpinned, the countdown runs on from where it stood, not from where the wall clock has got to');
+    ok(!retentionPlanTouchesAnything(afterUnpin),
+       'pin: so a recording pinned for months is not swept the moment it is unpinned');
+    ok(!planRecordRetention(resumed, { ...opts, now: now + 25 * DAY }).dropAudio,
+       'pin: it keeps the 26 days it had left');
+    const runOut = planRecordRetention(resumed, { ...opts, now: now + 26 * DAY });
+    ok(runOut.dropAudio && runOut.dropRow, 'pin: and is deleted once they have run out, as any other');
+
+    const madeWhilePinned = { id: 21, timestamp: now - 100 * DAY, audioBytes, pinnedAt: now - 96 * DAY,
+                              transcripts: [{ id: 't2', time: now - 10 * DAY }] };
+    eq(planRecordRetention(madeWhilePinned, opts).textExpiresInMs, 30 * DAY,
+       'pin: text written while a recording is pinned has not started to age');
+    setPinned(madeWhilePinned, false, now);
+    const madeLater = planRecordRetention(madeWhilePinned, { ...opts, now: now + 29 * DAY });
+    ok(madeLater.dropAudio && madeLater.dropTranscriptIds.length === 0 && fmtRetentionRemaining(madeLater.textExpiresInMs) === '1d',
+       'pin: its clock starts when the pin comes off, while the audio carries on from where it stood');
+    const madeAfter = planRecordRetention({ id: 22, timestamp: now - 100 * DAY, audioBytes,
+        pinnedSpans: [[now - 96 * DAY, now - 20 * DAY]], transcripts: [{ id: 't3', time: now - 15 * DAY }] },
+        { now, audioMs: 30 * DAY, textMs: 7 * DAY });
+    ok(madeAfter.dropTranscriptIds.join(',') === 't3' && !madeAfter.dropAudio && fmtRetentionRemaining(madeAfter.audioExpiresInMs) === '6d',
+       'pin: text written after a pin came off ages by the wall clock, while the audio keeps the time it spent pinned');
+
+    const toggled = { id: 23, timestamp: now - DAY, audioBytes };
+    ok(setPinned(toggled, true, now) && toggled.pinnedAt === now, 'pin: pinning notes when the pin began');
+    ok(!setPinned(toggled, true, now + DAY) && toggled.pinnedAt === now,
+       'pin: pinning a pinned recording again changes nothing, so a tab showing an older state cannot move the pin');
+    ok(!setPinned({ id: 24, timestamp: now }, false, now), 'pin: and unpinning one that is not pinned changes nothing');
+
+    const busy = { id: 25, timestamp: now - 400 * DAY, audioBytes };
+    let toggledAt = now - 399 * DAY;
+    for (let i = 0; i < PINNED_SPANS_KEPT + 10; i++) {
+        setPinned(busy, true, toggledAt); toggledAt += HOUR;
+        setPinned(busy, false, toggledAt); toggledAt += HOUR;
+    }
+    const exactAge = 400 * DAY - (PINNED_SPANS_KEPT + 10) * HOUR;
+    const keptAge = retentionAge(busy, now - 400 * DAY, now);
+    ok((busy.pinnedSpans || []).length <= PINNED_SPANS_KEPT && keptAge <= exactAge && keptAge > exactAge - (PINNED_SPANS_KEPT + 10) * HOUR,
+       `pin: pinned and unpinned over and over, a recording keeps a bounded note of it that only ever counts it younger, never older (${keptAge} vs ${exactAge})`);
+
+    const sweepWithPin = planRetentionSweep([
+        { id: 30, timestamp: now - 40 * DAY, audioBytes: 2048, pinnedAt: now - 39 * DAY },
+        { id: 31, timestamp: now - 40 * DAY, audioBytes: 4096 }
+    ], opts);
+    ok(sweepWithPin.actions.length === 1 && sweepWithPin.actions[0].id === 31 && sweepWithPin.counts.audioBytes === 4096,
+       'pin: a sweep, and what it announces, leave pinned recordings out');
+
     const { isShorterRetention, retentionAckToken, parseRetentionAck,
             retentionAckCovers, describeRetentionChange } =
         await import('../../src/js/retention-core.js');
@@ -4423,6 +4491,9 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
        'delete recording: the question for a failed save names the audio it still holds');
     eq(describeRecordingDeletion({}), 'This row holds nothing but its own entry.',
        'delete recording: an empty row says it is empty');
+    ok(/It is pinned \(📌\); a pin only stops automatic deletion\./.test(describeRecordingDeletion({ audioBytes: 2048, pinnedAt: 1 }))
+       && !/pinned/.test(describeRecordingDeletion({ audioBytes: 2048 })),
+       'delete recording: deleting a pinned recording by hand says the pin does not stop that');
     eq(parseDeletionIds(withDeletionId(withDeletionId('[]', 5, true), 7, true)), [5, 7], 'interrupted delete: ids are noted');
     eq(parseDeletionIds(withDeletionId('[5,7]', 5, false)), [7], 'interrupted delete: and cleared');
     eq(parseDeletionIds('not json'), [], 'interrupted delete: a damaged note reads as none');

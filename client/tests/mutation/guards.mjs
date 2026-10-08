@@ -2399,8 +2399,8 @@ export const mutations = [
     {
         id: 'MUT-TRANSCRIPT-OUTLIVED-BY-REPLY',
         file: 'src/js/retention-core.js',
-        from: '        .filter(item => itemTime(item) <= textCutoff && !answeredLater.has(String(item.id)))',
-        to: '        .filter(item => itemTime(item) <= textCutoff)',
+        from: '        .filter(item => ageOf(itemTime(item)) >= textMs && !answeredLater.has(String(item.id)))',
+        to: '        .filter(item => ageOf(itemTime(item)) >= textMs)',
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /a transcript is kept while a reply written from it is kept/
     },
@@ -3653,5 +3653,45 @@ export const mutations = [
         to: '        else if (false) await acceptServingBuild({ timeoutMs: _askTimeoutMs });',
         command: ['node', 'tests/unit/platform.test.mjs'],
         expected: /having told the serving build it is accepted/
+    },
+    {
+        id: 'MUT-PINNED-SWEPT',
+        file: 'src/js/retention-core.js',
+        from: '    if (isPinned(rec)) return { ...empty, pinned: true, audioExpiresInMs, textExpiresInMs };',
+        to: '    if (false) return { ...empty, pinned: true, audioExpiresInMs, textExpiresInMs };',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /shortening both windows to five minutes still deletes nothing in it/
+    },
+    {
+        id: 'MUT-PIN-CLOCK-RUNS',
+        file: 'src/js/retention-core.js',
+        from: '    if (isPinned(rec)) spans.push([Number(rec.pinnedAt), now]);\n',
+        to: '',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /its countdowns stand where they were when it was pinned/
+    },
+    {
+        id: 'MUT-PIN-RESUMES-FROM-WALL-CLOCK',
+        file: 'src/js/retention-core.js',
+        from: '    spans.push([Number(rec.pinnedAt), now]);\n    delete rec.pinnedAt;',
+        to: '    delete rec.pinnedAt;',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /the countdown runs on from where it stood, not from where the wall clock has got to/
+    },
+    {
+        id: 'MUT-PIN-TOGGLES-BLIND',
+        file: 'src/js/retention-core.js',
+        from: '    if (!rec || !!pinned === isPinned(rec)) return false;',
+        to: '    if (!rec) return false;\n    pinned = !isPinned(rec);',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /pinning a pinned recording again changes nothing/
+    },
+    {
+        id: 'MUT-PIN-RIGHT-OF-FORMAT',
+        file: 'src/js/gui.js',
+        from: '<span class="rec-top-tools">${pinBtn}${fmtBadge}</span>',
+        to: '<span class="rec-top-tools">${fmtBadge}${pinBtn}</span>',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the row offers 📌 left of the format/
     },
 ];

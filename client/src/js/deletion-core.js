@@ -1,5 +1,5 @@
 import { fmtBytes } from './config.js';
-import { hasLiveTranscript } from './retention-core.js';
+import { hasLiveTranscript, isPinned } from './retention-core.js';
 
 export function isFromLiveTranscript(transcript) {
     return !!transcript && (transcript.source === 'L' || !!transcript.fromLive);
@@ -65,7 +65,8 @@ export function describeRecordingDeletion(rec, { savedSoFarBytes = 0, savedSoFar
     if (summaries.length) parts.push(`${summaries.length} reply/replies`);
     if (hasLiveTranscript(rec) && !liveTranscriptStillShown(transcripts)) parts.push('the live transcript');
     if (chain.length) parts.push(`${chain.length} context item(s)`);
-    return parts.length ? `This removes ${parts.join(', ')}.` : 'This row holds nothing but its own entry.';
+    const pinned = isPinned(rec) ? ' It is pinned (📌); a pin only stops automatic deletion.' : '';
+    return (parts.length ? `This removes ${parts.join(', ')}.` : 'This row holds nothing but its own entry.') + pinned;
 }
 
 export const INTERRUPTED_DELETIONS_KEY = 'myai-deletions-in-progress-v1';

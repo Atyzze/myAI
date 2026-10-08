@@ -19,7 +19,7 @@ import {
 } from './live-tabs.js';
 import { AppState, startRecording, buildLivePreviewBlob, describeLiveContext } from './recorder.js';
 import { isCompact, noticeInterruptedDeletion } from './settings.js';
-import { retentionMs, planRecordRetention, fmtRetentionRemaining } from './retention-core.js';
+import { retentionMs, planRecordRetention, fmtRetentionRemaining, setPinned } from './retention-core.js';
 import { isRecordOwnedByLiveTab, isFreshHeartbeat } from './recording-lock.js';
 import { unfinishedRowState, ROW_ACTION_LABELS, liveHolesToFill, keyActivates } from './row-state-core.js';
 
@@ -667,14 +667,20 @@ function buildRecordingItem(rec) {
         audioMs: retentionMs(getSetting('set-retention-audio')),
         textMs:  retentionMs(getSetting('set-retention-text'))
     });
+    // A pinned recording's countdown is frozen where it stood: the same numbers, iced, and never "soon".
+    const frozen = retention.pinned;
     const expiryParts = [];
     if (retention.audioExpiresInMs != null) {
-        expiryParts.push(`<span class="${retention.audioExpiresInMs <= 24 * 3600 * 1000 ? 'soon' : ''}" title="Audio is deleted automatically when this reaches zero. Download it to keep it.">⏳ audio ${escapeHtml(fmtRetentionRemaining(retention.audioExpiresInMs))}</span>`);
+        expiryParts.push(frozen
+            ? `<span title="Frozen: this recording is pinned, so its audio is not deleted automatically. Unpin it and the countdown runs on from here.">❄️ audio ${escapeHtml(fmtRetentionRemaining(retention.audioExpiresInMs))}</span>`
+            : `<span class="${retention.audioExpiresInMs <= 24 * 3600 * 1000 ? 'soon' : ''}" title="Audio is deleted automatically when this reaches zero. Pin the recording (📌) to stop the countdown, or download it.">⏳ audio ${escapeHtml(fmtRetentionRemaining(retention.audioExpiresInMs))}</span>`);
     }
     if (retention.textExpiresInMs != null) {
-        expiryParts.push(`<span class="${retention.textExpiresInMs <= 24 * 3600 * 1000 ? 'soon' : ''}" title="Transcripts and replies are deleted automatically when this reaches zero.">📝 text ${escapeHtml(fmtRetentionRemaining(retention.textExpiresInMs))}</span>`);
+        expiryParts.push(frozen
+            ? `<span title="Frozen: this recording is pinned, so its transcripts and replies are not deleted automatically. Unpin it and the countdown runs on from here.">❄️ text ${escapeHtml(fmtRetentionRemaining(retention.textExpiresInMs))}</span>`
+            : `<span class="${retention.textExpiresInMs <= 24 * 3600 * 1000 ? 'soon' : ''}" title="Transcripts and replies are deleted automatically when this reaches zero. Pin the recording (📌) to stop the countdown.">📝 text ${escapeHtml(fmtRetentionRemaining(retention.textExpiresInMs))}</span>`);
     }
-    const expiryHtml = expiryParts.length ? `<div class="rec-expiry">${expiryParts.join('')}</div>` : '';
+    const expiryHtml = expiryParts.length ? `<div class="rec-expiry${frozen ? ' frozen' : ''}">${expiryParts.join('')}</div>` : '';
     // One row: the size bar on the left, the retention countdown in the room to its right. It wraps
     // below the bar only where the row is too narrow for both.
     const metaRowHtml = (storageBar || expiryHtml) ? `<div class="rec-meta">${storageBar}${expiryHtml}</div>` : '';
@@ -686,6 +692,11 @@ function buildRecordingItem(rec) {
             ? `<button class="fmt-badge fmt-convert" data-fmt-rec="${rec.id}" data-action="convertRecFormat" data-rec-id="${rec.id}" title="Stored as WAV. Tap to convert just this recording to ${pref.toUpperCase()} and reclaim space.">${recFmt.toUpperCase()} → ${pref.toUpperCase()}</button>`
             : `<span class="fmt-badge fmt-current" title="Stored as ${recFmt.toUpperCase()}">${recFmt.toUpperCase()}</span>`)
         : '';
+    // Left of the format: the pin. It names the state a tap asks for, so a tab still showing an
+    // older state cannot flip the pin the wrong way.
+    const pinBtn = `<button class="pin-btn${frozen ? ' pinned' : ''}" data-action="pinRec" data-rec-id="${rec.id}" data-pin="${frozen ? '0' : '1'}" aria-pressed="${frozen}" aria-label="Pin recording" title="${frozen
+        ? 'Pinned: the countdown below is frozen and nothing in this recording is deleted automatically. Tap to unpin; the countdown then runs on from where it stands.'
+        : 'Pin: freeze the countdown below, so nothing in this recording is deleted automatically. Browser storage can still be cleared; only a download cannot be.'}">📌</button>`;
 
     const fillsGaps          = liveHolesToFill(allT);
     const showScribeButtons  = !compact || !hasTranscripts || fillsGaps;
@@ -747,7 +758,7 @@ function buildRecordingItem(rec) {
         : '';
 
     li.innerHTML = `
-    <div class="rec-top"><span class="rec-filename" role="button" tabindex="0" data-edit-title data-rec="${rec.id}" title="Click to rename this recording">${safeName}</span>${fmtBadge}</div>
+    <div class="rec-top"><span class="rec-filename" role="button" tabindex="0" data-edit-title data-rec="${rec.id}" title="Click to rename this recording">${safeName}</span><span class="rec-top-tools">${pinBtn}${fmtBadge}</span></div>
     ${metaRowHtml}
     ${hasAudio ? `<div class="rec-player"><div class="player" data-dur="${rec.durationMs || 0}">
       <audio data-rec-audio="${rec.id}" preload="none"></audio>
@@ -1355,6 +1366,26 @@ window.saveRecTitle = async function saveRecTitle(id, value) {
     renderList({ force: true });
 };
 
+// Pinning writes only the pin: a recording still being saved, or being deleted, is left as it is.
+// The automatic sweep plans each row again inside its own write, so a pin that lands first is seen.
+window.pinRec = async function pinRec(id, pinned) {
+    const key = Number(id);
+    const refocus = !!(document.activeElement && document.activeElement.dataset
+        && document.activeElement.dataset.action === 'pinRec');
+    let changed = false;
+    await dbUpdate(CONFIG.STORE_REC, key, (rec) => {
+        if (!rec || rec.processing || rec.deleting) return null;
+        changed = setPinned(rec, pinned, Date.now());
+        return changed ? rec : null;
+    });
+    await renderList({ force: true });
+    if (refocus) {
+        const button = document.querySelector(`#rec-${key} .pin-btn`);
+        if (button && typeof button.focus === 'function') button.focus();
+    }
+    return changed;
+};
+
 window.downloadRec = async function downloadRec(id) {
     const key = Number(id);
     const rec = await dbExec(CONFIG.STORE_REC, 'get', key);
@@ -1418,6 +1449,7 @@ export function wireActionDelegation() {
             case 'convertRecFormat': return window.convertRecFormat(recId);
             case 'continueConv': return window.continueConv(recId);
             case 'toggleLinkRec': return window.toggleLinkRec(recId, el.dataset.linkLabel || '');
+            case 'pinRec': return window.pinRec(recId, el.dataset.pin === '1');
             case 'downloadRec': return window.downloadRec(recId);
             case 'deleteTranscript': {
                 const selected = document.getElementById(`drop-t-${recId}`)?.value;

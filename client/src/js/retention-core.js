@@ -70,19 +70,87 @@ export function recordingEndedAt(rec) {
     return Math.max(Number(rec.endedAt) || 0, startedAt + Math.max(0, Number(rec.durationMs) || 0));
 }
 
+// A pinned recording's clocks stand still. `pinnedAt` is when the pin that holds now began, and
+// `pinnedSpans` keeps the pins that have ended, as [from, to] pairs, so that unpinning lets each
+// countdown run on from where it stood rather than from where the wall clock has got to. A pin
+// stops only automatic deletion: deleting by hand, and the browser clearing its storage, still delete.
+export const PINNED_SPANS_KEPT = 32;
+
+export function isPinned(rec) {
+    return Number(rec && rec.pinnedAt) > 0;
+}
+
+function validSpans(spans) {
+    const valid = [];
+    for (const span of Array.isArray(spans) ? spans : []) {
+        const from = Number(span && span[0]);
+        const to = Number(span && span[1]);
+        if (Number.isFinite(from) && Number.isFinite(to) && to > from) valid.push([from, to]);
+    }
+    return valid.sort((a, b) => a[0] - b[0]);
+}
+
+// The time between `since` and `now` that the recording spent pinned. Pins that overlap (a clock
+// set back) are counted once.
+function pinnedTime(rec, since, now) {
+    const spans = validSpans(rec && rec.pinnedSpans);
+    if (isPinned(rec)) spans.push([Number(rec.pinnedAt), now]);
+    spans.sort((a, b) => a[0] - b[0]);
+    let paused = 0;
+    let counted = since;
+    for (const [from, to] of spans) {
+        const start = Math.max(from, counted);
+        const end = Math.min(to, now);
+        if (end > start) {
+            paused += end - start;
+            counted = end;
+        }
+    }
+    return paused;
+}
+
+// How old something the recording holds is, when it was made at `at`: the time since then that
+// the recording spent unpinned. Something made while the recording was pinned starts aging when
+// the pin is taken off.
+export function retentionAge(rec, at, now = Date.now()) {
+    return (now - at) - pinnedTime(rec, at, now);
+}
+
+// Pins or unpins a recording row in place and says whether it changed. Asking for the state it
+// already has changes nothing, so a tab showing an older state cannot flip a pin the wrong way.
+export function setPinned(rec, pinned, now = Date.now()) {
+    if (!rec || !!pinned === isPinned(rec)) return false;
+    if (pinned) {
+        rec.pinnedAt = now;
+        return true;
+    }
+    const spans = validSpans(rec.pinnedSpans);
+    spans.push([Number(rec.pinnedAt), now]);
+    delete rec.pinnedAt;
+    // Joining the two oldest pins counts the time between them as pinned too, which can only
+    // make something live longer, never shorter.
+    const kept = validSpans(spans);
+    while (kept.length > PINNED_SPANS_KEPT) {
+        const [first, second] = kept.splice(0, 2);
+        kept.unshift([first[0], Math.max(first[1], second[1])]);
+    }
+    if (kept.length) rec.pinnedSpans = kept;
+    else delete rec.pinnedSpans;
+    return true;
+}
+
 export function planRecordRetention(rec, { now = Date.now(), audioMs = 0, textMs = 0 } = {}) {
     const empty = {
         dropAudio: false, dropTranscriptIds: [], dropSummaryIds: [],
         dropContext: false, dropLive: false, dropRow: false,
-        audioExpiresInMs: null, textExpiresInMs: null
+        audioExpiresInMs: null, textExpiresInMs: null, pinned: false
     };
     if (!rec) return empty;
 
     if (rec.processing || rec.deleting) return empty;
 
     const recordedAt = recordingEndedAt(rec);
-    const audioCutoff = now - audioMs;
-    const textCutoff  = now - textMs;
+    const ageOf = at => retentionAge(rec, at, now);
 
     const transcripts = Array.isArray(rec.transcripts) ? rec.transcripts : [];
     const summaries   = Array.isArray(rec.summaries) ? rec.summaries : [];
@@ -91,23 +159,31 @@ export function planRecordRetention(rec, { now = Date.now(), audioMs = 0, textMs
         : (rec.context ? [rec.context] : []);
 
     const itemTime = item => Number(item && item.time) || recordedAt;
+    const hasAudio = Number(rec.audioBytes) > 0;
+    const hasLive = hasLiveTranscript(rec);
+    const audioExpiresInMs = hasAudio && recordedAt > 0 ? audioMs - ageOf(recordedAt) : null;
+    const textExpiresInMs = youngestTextExpiry(transcripts, summaries, chain, hasLive, recordedAt, textMs, ageOf, itemTime);
+
+    // A pinned recording is past neither window: its countdowns stand where they were when it was
+    // pinned, and nothing in it is deleted automatically until it is unpinned.
+    if (isPinned(rec)) return { ...empty, pinned: true, audioExpiresInMs, textExpiresInMs };
 
     const answeredLater = new Set(summaries
-        .filter(item => itemTime(item) > textCutoff && item.transcriptId != null)
+        .filter(item => ageOf(itemTime(item)) < textMs && item.transcriptId != null)
         .map(item => String(item.transcriptId)));
     const dropTranscriptIds = transcripts
-        .filter(item => itemTime(item) <= textCutoff && !answeredLater.has(String(item.id)))
+        .filter(item => ageOf(itemTime(item)) >= textMs && !answeredLater.has(String(item.id)))
         .map(item => item.id);
     const dropSummaryIds = summaries
-        .filter(item => itemTime(item) <= textCutoff)
+        .filter(item => ageOf(itemTime(item)) >= textMs)
         .map(item => item.id);
 
-    const dropAudio = Number(rec.audioBytes) > 0 && recordedAt > 0 && recordedAt <= audioCutoff;
-    const dropContext = chain.length > 0 && recordedAt > 0 && recordedAt <= textCutoff;
-    const hasLive = hasLiveTranscript(rec);
-    const dropLive = hasLive && recordedAt > 0 && recordedAt <= textCutoff;
+    const recordingAge = recordedAt > 0 ? ageOf(recordedAt) : -Infinity;
+    const dropAudio = hasAudio && recordingAge >= audioMs;
+    const dropContext = chain.length > 0 && recordingAge >= textMs;
+    const dropLive = hasLive && recordingAge >= textMs;
 
-    const keepsAudio = Number(rec.audioBytes) > 0 && !dropAudio;
+    const keepsAudio = hasAudio && !dropAudio;
     const keepsText  = (transcripts.length - dropTranscriptIds.length) > 0
                     || (summaries.length - dropSummaryIds.length) > 0
                     || (chain.length > 0 && !dropContext)
@@ -122,8 +198,9 @@ export function planRecordRetention(rec, { now = Date.now(), audioMs = 0, textMs
         dropContext,
         dropLive,
         dropRow,
-        audioExpiresInMs: Number(rec.audioBytes) > 0 && recordedAt > 0 ? (recordedAt + audioMs) - now : null,
-        textExpiresInMs: newestTextExpiry(transcripts, summaries, chain, hasLive, recordedAt, textMs, now, itemTime)
+        audioExpiresInMs,
+        textExpiresInMs,
+        pinned: false
     };
 }
 
@@ -131,15 +208,16 @@ export function hasLiveTranscript(rec) {
     return Number(rec && rec.liveTranscriptLines) > 0;
 }
 
-function newestTextExpiry(transcripts, summaries, chain, hasLive, recordedAt, textMs, now, itemTime) {
-    let newest = null;
+// The text countdown ends when the youngest text the recording holds reaches the text window.
+function youngestTextExpiry(transcripts, summaries, chain, hasLive, recordedAt, textMs, ageOf, itemTime) {
+    let youngest = null;
     for (const item of [...transcripts, ...summaries]) {
-        const at = itemTime(item);
-        if (newest == null || at > newest) newest = at;
+        const age = ageOf(itemTime(item));
+        if (youngest == null || age < youngest) youngest = age;
     }
-    if (newest == null && (chain.length > 0 || hasLive) && recordedAt > 0) newest = recordedAt;
-    if (newest == null) return null;
-    return (newest + textMs) - now;
+    if (youngest == null && (chain.length > 0 || hasLive) && recordedAt > 0) youngest = ageOf(recordedAt);
+    if (youngest == null) return null;
+    return textMs - youngest;
 }
 
 export function retentionPlanTouchesAnything(plan) {

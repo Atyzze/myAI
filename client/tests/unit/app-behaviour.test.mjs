@@ -277,6 +277,62 @@ function zipEntries(bytes) {
        'rows: the row of a recording whose tab went away before saving it offers Recover now and Delete');
 }
 
+// A pinned recording: the row offers 📌 left of its format, a tap pins it and freezes its
+// countdown, and the automatic sweep leaves it whole until it is unpinned and its time runs out.
+{
+    await clearAll();
+    const gui = await import('../../src/js/gui.js');
+    localStorage.setItem('set-retention-audio', '5m');
+    localStorage.setItem('set-retention-text', '5m');
+    localStorage.setItem('retention-policy-acknowledged-v2', retentionAckToken({ audio: '5m', text: '5m' }));
+    const MIN = 60 * 1000;
+    const now = Date.now();
+    const id = await addRecording({ filename: 'keep this', timestamp: now - 2 * MIN, durationMs: MIN, endedAt: now - MIN,
+                                    transcripts: [{ id: 'k', source: 'S', text: 'keep', plain: 'keep', time: now - MIN }] },
+                                  { audio: wav(1) });
+    const saving = await addRecording({ filename: 'still saving', processing: true, captureState: 'finalize-error' });
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowHtml = recId => (walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`) || {}).innerHTML || '';
+    await gui.renderList({ force: true });
+    await settle();
+    const top = (rowHtml(id).match(/<div class="rec-top">[\s\S]*?<\/div>/) || [''])[0];
+    const pinAt = top.indexOf('data-action="pinRec"');
+    ok(pinAt > 0 && top.indexOf('class="fmt-badge') > pinAt && /data-pin="1"/.test(top) && /aria-pressed="false"/.test(top),
+       `pin: the row offers 📌 left of the format, not yet pinned (${top})`);
+    ok(/⏳ audio/.test(rowHtml(id)) && !/rec-expiry frozen/.test(rowHtml(id)), 'pin: and its countdown runs');
+    ok(!/data-action="pinRec"/.test(rowHtml(saving)), 'pin: a recording that is not saved yet has no pin');
+
+    ok(await window.pinRec(id, true) && (await row(id)).pinnedAt > 0, 'pin: a tap on 📌 pins the recording');
+    const pinned = rowHtml(id);
+    ok(/class="pin-btn pinned"/.test(pinned) && /data-pin="0"/.test(pinned) && /aria-pressed="true"/.test(pinned),
+       'pin: the row then shows it pinned, and a second tap would unpin it');
+    ok(/class="rec-expiry frozen"/.test(pinned) && /❄️ audio/.test(pinned) && /❄️ text/.test(pinned) && !/⏳|class="soon"/.test(pinned),
+       'pin: with its countdown frozen');
+    eq(await window.pinRec(saving, true), false, 'pin: a recording that is not saved yet cannot be pinned');
+
+    // An hour later by the wall clock, pinned a minute after it ended: far past a five-minute window.
+    await db.dbUpdate(CONFIG.STORE_REC, id, rec => {
+        rec.timestamp = now - 61 * MIN; rec.endedAt = now - 60 * MIN; rec.transcripts[0].time = now - 60 * MIN;
+        rec.pinnedAt = now - 59 * MIN;
+        return rec;
+    });
+    await settings.runRetentionSweep({ announce: false });
+    ok(await row(id) && await db.readAudio(id) && (await row(id)).transcripts.length === 1,
+       'pin: the sweep leaves a pinned recording whole, an hour past a five-minute window');
+    eq(await window.pinRec(id, true), false, 'pin: pinning it again from a tab that still shows it unpinned changes nothing');
+    ok(await window.pinRec(id, false) && !(await row(id)).pinnedAt, 'pin: a tap on 📌 unpins it');
+    ok(/data-pin="1"/.test(rowHtml(id)) && /⏳ audio [34]m/.test(rowHtml(id)),
+       `pin: and its countdown runs on from the four minutes it had left (${(rowHtml(id).match(/⏳ audio [^<]*/) || [''])[0]})`);
+    await settings.runRetentionSweep({ announce: false });
+    ok(await row(id) && await db.readAudio(id), 'pin: so it is not swept the moment it is unpinned');
+    await db.dbUpdate(CONFIG.STORE_REC, id, rec => {
+        rec.pinnedSpans = rec.pinnedSpans.map(([from, to]) => [from, to - 5 * MIN]);
+        return rec;
+    });
+    await settings.runRetentionSweep({ announce: false });
+    ok(!(await row(id)) && !(await db.readAudio(id)), 'pin: and once the time it had left has run out, the sweep deletes it as any other');
+}
+
 // A live transcript with holes: the saved reading marks them, the compact row offers to fill just
 // those, and filling sends only the audio the live view never heard.
 {
