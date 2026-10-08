@@ -431,7 +431,9 @@ function translationsInFlight() {
 }
 
 function requestTranslations(rows, target) {
-    if (!state.active) return;
+    // Once Stop is finishing the last windows, nothing new is sent to be translated: what is saved is
+    // taken before an answer could arrive, and the lines left over are completed after the recording.
+    if (!state.active || state.stopping) return;
     const epoch = state.epoch;
     const lock = `panel:${target}`;
     if (state.translating.has(lock)) return;

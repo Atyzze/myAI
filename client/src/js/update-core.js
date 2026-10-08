@@ -177,7 +177,7 @@ export function updateBlocked(state, { recording = false } = {}) {
 
 export function describeBlockedUpdate(state) {
     const pending = readyBuild(state) || (state && state.server) || 'the new build';
-    return 'Something is still running in this tab (a recording, its save, a transcription, a reply or a backup), '
+    return 'Something is still running in this tab (a recording, its save, a transcription, a reply, finishing translations or a backup), '
          + 'so the page will not be reloaded now. '
          + `Let it finish or stop it, then tap the version again to load ${pending}.`;
 }

@@ -2056,6 +2056,25 @@
         "MUT-PIN-TOGGLES-BLIND",
         "MUT-PIN-RIGHT-OF-FORMAT"
       ]
+    },
+    {
+      "id": "TRANSLATIONS-AFTER-STOP-SHOWN-001",
+      "title": "Translations the boxes did not finish before Stop are completed after the recording in sight: the recording shows how far they are and that they wait for a reply, its ✕ stops only them, every answer is kept as it comes in the live transcript and in the transcript the row shows (also the one made after the recording from the live lines), a live transcript deleted meanwhile stays deleted, and nothing new is sent to be translated once Stop is finishing",
+      "suites": [
+        "pure",
+        "app-behaviour",
+        "static-integrity"
+      ],
+      "mutationGuards": [
+        "MUT-FILL-KEPT-ONLY-AT-END",
+        "MUT-FILL-SILENT",
+        "MUT-FILL-CROSS-CANCELS",
+        "MUT-FILL-WRITES-DELETED-LIVE",
+        "MUT-LIVE-UPDATE-NOT-ATOMIC",
+        "MUT-READING-WITHOUT-TRANSLATIONS",
+        "MUT-REUSED-READING-WITHOUT-TRANSLATIONS",
+        "MUT-REFRESH-SKIPS-SHOWN-READING"
+      ]
     }
   ],
   "untestedModules": []

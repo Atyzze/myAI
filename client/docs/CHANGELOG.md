@@ -66,3 +66,4 @@ Builds 37 to 89 had one notes file each; they are condensed here. The full notes
 - 137: A recording's retention countdown moves up into the room to the right of its size bar, one row instead of two, down to a 360 px phone.
 - 138: A new build is never put in use by itself: it is downloaded and offered on the version badge (now also by a check every half hour), and only a tap on the badge switches to it; closing every tab or reloading no longer does.
 - 139: 📌 left of a recording's format pins it: its countdown freezes and nothing in it is deleted automatically until it is unpinned, when the countdown runs on from where it stood.
+- 140: Translations the boxes had not finished at Stop are completed in sight: the recording shows how far they are and that they wait for the reply, their own ✕ stops them, and each answer is kept as it comes and lands in the transcript the row shows.

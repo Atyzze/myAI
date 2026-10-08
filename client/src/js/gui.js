@@ -8,14 +8,15 @@ import { makeWebmSeekable, needsSeekableUpgrade, WEBM_SEEKABLE_VERSION } from '.
 import { isLivePlayerId, shouldRewindOnEnded, resolvePlayerTotalSec, playerFraction,
          planLivePreview } from './player-core.js';
 import { planRender } from './render-defer.js';
-import { hasJob } from './jobs.js';
+import { hasJob, cancelJob } from './jobs.js';
+import { describeFillProgress } from './transcribe-core.js';
 import { PAGINATION_BARS, paginationBarVisible } from './pagination-core.js';
 import { pickSelection, rememberSelection } from './selection-core.js';
 import { transcribeChunked }         from './transcribe.js';
 import { runSummary } from './reply.js';
 import {
     liveLogClear, openLiveLogTab, openReplyStreamTab, replyStreamInit,
-    showLiveStatus, updateLiveStatus, removeLiveStatus
+    showLiveStatus, updateLiveStatus, removeLiveStatus, liveStatusText
 } from './live-tabs.js';
 import { AppState, startRecording, buildLivePreviewBlob, describeLiveContext } from './recorder.js';
 import { isCompact, noticeInterruptedDeletion } from './settings.js';
@@ -553,6 +554,12 @@ function restoreRunningJobStatus(rec) {
         showLiveStatus(rec.id, 'reply', '\u{1F9E0} Working\u2026 (tap to watch)',
             () => openReplyStreamTab(rec.id, rec.filename),
             () => window.cancelRecJob(rec.id));
+    }
+    // The translations finished after a recording: the bar comes back as it was, and its ✕ stops
+    // only them, not a transcription or reply of the same recording.
+    if (hasJob('f', rec.id)) {
+        showLiveStatus(rec.id, 'translate', liveStatusText(rec.id, 'translate') || describeFillProgress(null),
+            null, () => cancelJob('f', rec.id));
     }
 }
 

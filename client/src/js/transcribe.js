@@ -1,5 +1,4 @@
 import { CONFIG, fmtDur, getSetting, uid, confirmServerProcessing } from './config.js';
-import { languageLabel } from './translate-core.js';
 import { translateLines }                      from './reply.js';
 import { dbExec, dbUpdate, readAudio, readLiveTranscript, updateLiveTranscript } from './db.js';
 import { encodeMonoWav, resampleTo16k, inspectPcmWav,
@@ -8,7 +7,8 @@ import { prepareWebmChunkSource }               from './webm-duration.js';
 import { planAudioChunks, textForChunkCore, chunkCoreSamples,
          reassembleTimeline, planWholeFileDecode,
          invertCoverage, mergeIntervals, planChunksForRanges, liveLinesAsResults, liveHoles, holeResults,
-         fillMissingTranslations, summarizeChunkLevel, isNearSilent, settleLiveReplays,
+         fillMissingTranslations, describeFillProgress, withTranslations, spokenPart,
+         summarizeChunkLevel, isNearSilent, settleLiveReplays,
          chunkRetryDelayMs, nextPoolLimit, runAdaptivePool, shouldWaitForOwnChunk, POOL_START,
          createServerQueue, requestCameBack, anotherRequestBack } from './transcribe-core.js';
 import { beginJob, endJob, abortError, hasJobOfKind } from './jobs.js';
@@ -300,62 +300,74 @@ async function storeTranscript(recId, resultGeneration, { timestamped, plain }, 
     });
 }
 
+// The live transcript as the recording's reading ('L'). What it never heard is marked where it was,
+// so the saved reading does not pass a hole off as the whole recording; the row then offers to
+// transcribe just those parts.
+function liveReading(live, durationMs) {
+    const holes = liveHoles(live.coverage, Math.max(0, Number(durationMs) || 0) / 1000);
+    const results = [...liveLinesAsResults(live.lines || []), ...holeResults(holes)];
+    return { ...withTranslations(reassembleTimeline(results, results.length), live), holes: holes.length };
+}
+
 export async function storeLiveTranscript(recId) {
     const rec = await dbExec(CONFIG.STORE_REC, 'get', recId);
     const live = await readLiveTranscript(recId);
     const lines = (live && live.lines) || [];
     if (!rec || !lines.length) return false;
     if ((rec.transcripts || []).length > 0) return false;
-    // What the live transcript never heard is marked where it was, so the saved reading does not
-    // pass a hole off as the whole recording; the row then offers to transcribe just those parts.
-    const holes = liveHoles(live.coverage, Math.max(0, Number(rec.durationMs) || 0) / 1000);
-    const results = [...liveLinesAsResults(lines), ...holeResults(holes)];
-    const assembled = reassembleTimeline(results, results.length);
-    const stored = await storeTranscript(recId, rec.resultGeneration || 0,
-                                         withTranslations(assembled, live), 'L', { holes: holes.length });
+    const reading = liveReading(live, rec.durationMs);
+    const stored = await storeTranscript(recId, rec.resultGeneration || 0, reading, 'L', { holes: reading.holes });
     return !!stored;
 }
 
-function withTranslations(assembled, live) {
-    const lines = (live && live.lines) || [];
-    const languages = (live && live.languages) || [];
-    const useful = languages.filter(code =>
-        lines.some(line => line.translations && line.translations[code]));
-    if (!useful.length) return assembled;
-    const base = (lines.find(line => line.language) || {}).language || languages[0] || '';
+// A reading made after the recording from the live lines carries the translations too, as they are
+// in the live transcript when it is stored: with Auto-transcribe on it is the one the row shows.
+async function withLiveTranslations(recId, assembled) {
+    const live = await readLiveTranscript(recId).catch(() => null);
+    return withTranslations(assembled, live);
+}
 
-    const section = code => {
-        let carried = 0;
-        const body = lines.map(line => {
-            const done = line.translations && line.translations[code];
-            const spoken = (line.language || '').toLowerCase();
-            const foreign = !done && spoken && spoken !== code.toLowerCase();
-            if (foreign) carried++;
-            return `[${fmtDur((line.startSec || 0) * 1000)}] `
-                + (foreign ? `[${spoken}] ` : '') + (done || line.text || '');
-        }).join('\n');
-        const note = carried
-            ? ` (${carried} line${carried === 1 ? '' : 's'} could not be rendered in this language)` : '';
-        return `\n\n── ${languageLabel(code, base)}${note} ──\n${body}`;
-    };
-    const spoken = assembled.timestamped || assembled.plain || '';
-    return {
-        timestamped: `── As spoken (each line in the language it was said in) ──\n${spoken}`
-            + useful.map(section).join(''),
-        plain: assembled.plain || ''
-    };
+// Puts the live transcript's translations into every reading made from it: the 'L' reading is built
+// again as it was stored, holes marked, and a reading made after the recording from the live lines
+// keeps its own words and gets the language sections. `plain`, which replies use, is left as it is.
+export async function refreshLiveReadings(recId) {
+    const rec = await dbExec(CONFIG.STORE_REC, 'get', recId);
+    const live = await readLiveTranscript(recId);
+    if (!rec || !live || !(live.lines || []).length) return false;
+    const reading = liveReading(live, rec.durationMs);
+    return !!(await dbUpdate(CONFIG.STORE_REC, recId, current => {
+        if (!current || current.deleting) return null;
+        let changed = false;
+        for (const item of current.transcripts || []) {
+            let text = null;
+            if (item.source === 'L') text = reading.timestamped || reading.plain;
+            else if (item.fromLive) text = withTranslations({ timestamped: spokenPart(item.text), plain: item.plain }, live).timestamped;
+            if (text && text !== item.text) {
+                item.text = text;
+                changed = true;
+            }
+        }
+        return changed ? current : null;
+    }));
 }
 
 export const FILL_REPLY_POLL_MS = 1000;
 
-async function waitWhileAnyReplyRuns(signal) {
+async function waitWhileAnyReplyRuns(signal, noteWaiting = () => {}) {
+    let waited = false;
     while (hasJobOfKind('r')) {
         if (signal && signal.aborted) throw abortError();
+        if (!waited) { waited = true; noteWaiting(true); }
         await new Promise(resolve => setTimeout(resolve, FILL_REPLY_POLL_MS));
     }
+    if (waited) noteWaiting(false);
     if (signal && signal.aborted) throw abortError();
 }
 
+// Completes the languages the translation boxes did not finish before Stop. It waits while any reply
+// runs, and reports where it is (`onProgress` gets the status line). Every answer is kept as it comes,
+// in the live transcript and in the readings made from it, so stopping it, or closing the tab, keeps
+// what was done; it ends by itself once the live transcript is gone.
 export async function fillTranslations(recId, { onProgress = () => {} } = {}) {
     const live = await readLiveTranscript(recId);
     const lines = (live && live.lines) || [];
@@ -363,51 +375,37 @@ export async function fillTranslations(recId, { onProgress = () => {} } = {}) {
     if (!lines.length || languages.length < 2) return { filled: 0, missing: 0, stopped: null, cancelled: false };
 
     const ctrl = beginJob('f', recId);
+    let progress = null;
+    let waiting = false;
+    const report = () => onProgress(describeFillProgress(progress, { waiting }));
+    const noteWaiting = now => { waiting = now; report(); };
+    const keepAnswers = async (target, answers) => {
+        const kept = await updateLiveTranscript(recId, current => {
+            if (!current) return null;
+            const stored = current.lines || [];
+            for (const [index, text] of Object.entries(answers)) {
+                const line = stored[Number(index)];
+                if (!line) continue;
+                line.translations = line.translations || {};
+                line.translations[target] = text;
+            }
+            return current;
+        });
+        if (!kept) { ctrl.abort(); return; }
+        await refreshLiveReadings(recId);
+    };
     let outcome;
     try {
         outcome = await fillMissingTranslations(lines, languages,
             (prompt, count) => translateLines(prompt, count, ctrl.signal),
-            { onProgress, signal: ctrl.signal, waitBeforeEachRequest: () => waitWhileAnyReplyRuns(ctrl.signal) });
+            { onProgress: next => { progress = next; report(); }, onBatch: keepAnswers, signal: ctrl.signal,
+              waitBeforeEachRequest: () => waitWhileAnyReplyRuns(ctrl.signal, noteWaiting) });
     } finally {
         endJob('f', recId, ctrl);
     }
-    const { filled, done, missing, stopped, cancelled } = outcome;
+    const { done, missing, stopped, cancelled } = outcome;
     if (stopped) console.warn(stopped);
-
-    if (done === 0) return { filled: 0, missing, stopped, cancelled };
-    await updateLiveTranscript(recId, current => {
-        if (!current) return null;
-        const stored = current.lines || [];
-        for (const target of Object.keys(filled)) {
-            for (const index of Object.keys(filled[target])) {
-                const line = stored[Number(index)];
-                if (!line) continue;
-                line.translations = line.translations || {};
-                line.translations[target] = filled[target][index];
-            }
-        }
-        return current;
-    });
     return { filled: done, missing, stopped, cancelled };
-}
-
-export async function refreshLiveTranscript(recId) {
-    const rec = await dbExec(CONFIG.STORE_REC, 'get', recId);
-    const live = await readLiveTranscript(recId);
-    const lines = (live && live.lines) || [];
-    if (!rec || !lines.length) return false;
-    const existing = (rec.transcripts || []).find(item => item.source === 'L');
-    if (!existing) return false;
-    const results = liveLinesAsResults(lines);
-    const assembled = withTranslations(reassembleTimeline(results, results.length), live);
-    return !!(await dbUpdate(CONFIG.STORE_REC, recId, current => {
-        if (!current) return null;
-        const target = (current.transcripts || []).find(item => item.id == existing.id);
-        if (!target) return null;
-        target.text = assembled.timestamped || assembled.plain || target.text;
-        target.plain = assembled.plain || target.plain;
-        return current;
-    }));
 }
 
 export async function transcribeChunked(recId, progressCallback, { reuseLive = true } = {}) {
@@ -482,7 +480,8 @@ export async function transcribeChunked(recId, progressCallback, { reuseLive = t
                 liveLogAppend(recId, '✅ Nothing left to transcribe - the whole recording was covered live and passed the overlap review.');
                 progressCallback('100% - reusing the live transcript');
                 const reused = await storeTranscript(recId, resultGeneration,
-                    reassembleTimeline(liveResults, liveResults.length), 'S', { fromLive: true });
+                    await withLiveTranslations(recId, reassembleTimeline(liveResults, liveResults.length)),
+                    'S', { fromLive: true });
                 if (!reused) throw abortError('Result discarded because the recording changed or was deleted.');
                 return;
             }
@@ -584,7 +583,9 @@ export async function transcribeChunked(recId, progressCallback, { reuseLive = t
         const gapNote = noteParts.length ? ` - ${noteParts.join(', ')}` : '';
         liveLogAppend(recId, `🔗 Reassembled ${totalChunks} chunks → ${plain.length} chars${gapNote}`);
 
-        const stored = await storeTranscript(recId, resultGeneration, { timestamped, plain }, 'S',
+        const reading = liveResults.length > 0
+            ? await withLiveTranslations(recId, { timestamped, plain }) : { timestamped, plain };
+        const stored = await storeTranscript(recId, resultGeneration, reading, 'S',
                                              { fromLive: liveResults.length > 0 });
         if (!stored) throw abortError('Result discarded because the recording changed or was deleted.');
 

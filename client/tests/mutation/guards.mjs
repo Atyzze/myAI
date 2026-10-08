@@ -2423,8 +2423,8 @@ export const mutations = [
     {
         id: 'MUT-CLEANUP-KEEPS-AUTO-COPY',
         file: 'src/js/transcribe.js',
-        from: "                    reassembleTimeline(liveResults, liveResults.length), 'S', { fromLive: true });",
-        to: '                    reassembleTimeline(liveResults, liveResults.length));',
+        from: "                    'S', { fromLive: true });",
+        to: "                    'S');",
         command: ['node', 'tests/unit/static.test.mjs'],
         expected: /removes the live reading and its automatic copy/
     },
@@ -2567,8 +2567,8 @@ export const mutations = [
     {
         id: 'MUT-FILL-COMPETES-WITH-REPLY',
         file: 'src/js/transcribe.js',
-        from: '{ onProgress, signal: ctrl.signal, waitBeforeEachRequest: () => waitWhileAnyReplyRuns(ctrl.signal) }',
-        to: '{ onProgress, signal: ctrl.signal, waitBeforeEachRequest: null }',
+        from: '              waitBeforeEachRequest: () => waitWhileAnyReplyRuns(ctrl.signal, noteWaiting) });',
+        to: '              waitBeforeEachRequest: null });',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /the translation fill waits while a reply is running/
     },
@@ -3529,16 +3529,16 @@ export const mutations = [
     {
         id: 'MUT-HOLES-NOT-STORED',
         file: 'src/js/transcribe.js',
-        from: '    const results = [...liveLinesAsResults(lines), ...holeResults(holes)];',
-        to: '    const results = liveLinesAsResults(lines);',
+        from: '    const results = [...liveLinesAsResults(live.lines || []), ...holeResults(holes)];',
+        to: '    const results = liveLinesAsResults(live.lines || []);',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
-        expected: /marks the window it skipped/
+        expected: /still marks what the live transcript never heard|marks the window it skipped/
     },
     {
         id: 'MUT-HOLES-NOT-COUNTED',
         file: 'src/js/transcribe.js',
-        from: "                                         withTranslations(assembled, live), 'L', { holes: holes.length });",
-        to: "                                         withTranslations(assembled, live), 'L');",
+        from: "    const stored = await storeTranscript(recId, rec.resultGeneration || 0, reading, 'L', { holes: reading.holes });",
+        to: "    const stored = await storeTranscript(recId, rec.resultGeneration || 0, reading, 'L');",
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /counts them/
     },
@@ -3693,5 +3693,69 @@ export const mutations = [
         to: '<span class="rec-top-tools">${fmtBadge}${pinBtn}</span>',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /the row offers 📌 left of the format/
+    },
+    {
+        id: 'MUT-FILL-KEPT-ONLY-AT-END',
+        file: 'src/js/transcribe-core.js',
+        from: '        if (typeof onBatch === \'function\' && Object.keys(answers).length) await onBatch(target, answers);',
+        to: '        if (false) await onBatch(target, answers);',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /every answer is handed over as it comes/
+    },
+    {
+        id: 'MUT-FILL-SILENT',
+        file: 'src/js/recorder.js',
+        from: "                if (liveStatusText(recId, 'translate')) updateLiveStatus(recId, 'translate', text);\n                else showLiveStatus(recId, 'translate', text, null, () => cancelJob('f', recId));\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /while a reply runs the recording says its translations wait for it/
+    },
+    {
+        id: 'MUT-FILL-CROSS-CANCELS',
+        file: 'src/js/recorder.js',
+        from: "                else showLiveStatus(recId, 'translate', text, null, () => cancelJob('f', recId));",
+        to: "                else showLiveStatus(recId, 'translate', text, null, () => window.cancelRecJob(recId));",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /stopping the translations stops only them, not a reply on the same recording/
+    },
+    {
+        id: 'MUT-FILL-WRITES-DELETED-LIVE',
+        file: 'src/js/transcribe.js',
+        from: '        if (!kept) { ctrl.abort(); return; }',
+        to: '        if (!kept) return;',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a live transcript deleted while an answer was on its way stays deleted, and the fill ends there/
+    },
+    {
+        id: 'MUT-LIVE-UPDATE-NOT-ATOMIC',
+        file: 'src/js/db.js',
+        from: "export async function updateLiveTranscript(recId, mutate) {\n    if (recId == null) return false;\n    const db = await database();\n    const tx = db.transaction(CONFIG.STORE_LIVE, 'readwrite');\n    const row = await tx.store.get(recId);\n    const next = mutate((row && row.live) || null);\n    if (next && typeof next.then === 'function') {\n        throw new TypeError('updateLiveTranscript(mutate) must be synchronous, like dbUpdate.');\n    }\n    if (next) await tx.store.put({ recId, live: next, at: Date.now() });\n    await tx.done;\n    return !!next;\n}\n",
+        to: "export async function updateLiveTranscript(recId, mutate) {\n    const current = await readLiveTranscript(recId);\n    const next = mutate(current);\n    if (!next) return false;\n    return writeLiveTranscript(recId, next);\n}\n",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a change to the live transcript that overlaps its deletion does not bring it back/
+    },
+    {
+        id: 'MUT-READING-WITHOUT-TRANSLATIONS',
+        file: 'src/js/transcribe.js',
+        from: '            ? await withLiveTranslations(recId, { timestamped, plain }) : { timestamped, plain };',
+        to: '            ? { timestamped, plain } : { timestamped, plain };',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /it carries the translations the boxes made, as the live reading does/
+    },
+    {
+        id: 'MUT-REUSED-READING-WITHOUT-TRANSLATIONS',
+        file: 'src/js/transcribe.js',
+        from: '                    await withLiveTranslations(recId, reassembleTimeline(liveResults, liveResults.length)),',
+        to: '                    reassembleTimeline(liveResults, liveResults.length),',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the reading made after the recording from the live lines carries their translations/
+    },
+    {
+        id: 'MUT-REFRESH-SKIPS-SHOWN-READING',
+        file: 'src/js/transcribe.js',
+        from: "            else if (item.fromLive) text = withTranslations({ timestamped: spokenPart(item.text), plain: item.plain }, live).timestamped;",
+        to: "            else if (false) text = withTranslations({ timestamped: spokenPart(item.text), plain: item.plain }, live).timestamped;",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /each answer is kept as it comes, and reaches the transcript the row shows/
     },
 ];

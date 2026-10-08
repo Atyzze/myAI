@@ -237,11 +237,20 @@ export async function writeLiveTranscript(recId, live) {
     return true;
 }
 
+// One transaction from the read to the write, so a live transcript deleted in between (its last
+// transcript deleted by hand, say) stays deleted instead of being written back as a hidden copy.
 export async function updateLiveTranscript(recId, mutate) {
-    const current = await readLiveTranscript(recId);
-    const next = mutate(current);
-    if (!next) return false;
-    return writeLiveTranscript(recId, next);
+    if (recId == null) return false;
+    const db = await database();
+    const tx = db.transaction(CONFIG.STORE_LIVE, 'readwrite');
+    const row = await tx.store.get(recId);
+    const next = mutate((row && row.live) || null);
+    if (next && typeof next.then === 'function') {
+        throw new TypeError('updateLiveTranscript(mutate) must be synchronous, like dbUpdate.');
+    }
+    if (next) await tx.store.put({ recId, live: next, at: Date.now() });
+    await tx.done;
+    return !!next;
 }
 
 export async function deleteLiveTranscript(recId) {

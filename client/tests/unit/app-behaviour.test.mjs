@@ -257,6 +257,169 @@ function zipEntries(bytes) {
     ok(outcome.filled > 0 && generated.length > 0, `fill: and completes once the reply has finished (${JSON.stringify(outcome)})`);
 }
 
+// A recording stopped before its translation boxes caught up: the rest is translated after the
+// reply, in sight. The recording says so and how far it is, every answer is kept as it comes and
+// reaches the transcript the row shows, and stopping it stops only it and keeps what was done.
+{
+    await clearAll();
+    const recorder = await import('../../src/js/recorder.js');
+    const { liveStatusText } = await import('../../src/js/live-tabs.js');
+    const until = async (test, ms = 3000) => {
+        const end = Date.now() + ms;
+        while (Date.now() < end) { if (await test()) return true; await new Promise(resolve => setTimeout(resolve, 10)); }
+        return false;
+    };
+    const generated = [];
+    let releaseSecond = null;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+        const path = String(url);
+        const reply = body => ({ ok: true, status: 200, async json() { return body; }, async text() { return JSON.stringify(body); } });
+        if (path.endsWith('/api/tags')) return reply({ models: [{ name: 'qwen3.8:27b' }] });
+        if (path.endsWith('/api/ps')) return reply({ models: [{ name: 'qwen3.8:27b', size: 1, size_vram: 1 }] });
+        if (path.endsWith('/api/generate')) {
+            const body = JSON.parse(init.body || '{}');
+            generated.push(body.prompt);
+            if (generated.length === 2) {
+                await new Promise((resolve, reject) => {
+                    releaseSecond = resolve;
+                    if (init.signal) init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+                });
+            }
+            const numbered = String(body.prompt || '').split('\n').filter(line => /^\d+\. /.test(line))
+                .map(line => line.replace(/^(\d+)\. /, '$1. EN '));
+            return reply({ model: body.model, response: numbered.join('\n'), done: true });
+        }
+        return reply({});
+    };
+    window.cancelRecJob = jobs.cancelAllForRec;   // as main.js wires it: the ✕ of a transcription or reply
+    // The status line's ✕ is tapped for real: elements made from here on keep their listeners.
+    const realCreateElement = document.createElement;
+    const madeButtons = [];
+    document.createElement = tag => {
+        const el = realCreateElement(tag);
+        const listeners = {};
+        el.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
+        el.fire = type => (listeners[type] || []).forEach(fn => fn({ stopPropagation() {}, preventDefault() {} }));
+        if (el.tagName === 'BUTTON') madeButtons.push(el);
+        return el;
+    };
+    const transcribe = await import('../../src/js/transcribe.js');
+    const lines = Array.from({ length: 30 }, (_, i) => ({ key: `l${i}`, startSec: i * 3, endSec: i * 3 + 2,
+                                                         text: `Zin nummer ${i}`, language: 'nl', translations: {} }));
+    const id = await addRecording({ filename: 'stopped mid backlog', durationMs: 100000 },
+        { live: { lines, languages: ['nl', 'en'], coverage: [{ fromSec: 0, toSec: 92 }] } });
+    await transcribe.storeLiveTranscript(id);
+    await db.dbUpdate(CONFIG.STORE_REC, id, rec => {
+        rec.transcripts.unshift({ id: 's1', source: 'S', fromLive: true, text: '[00:00-00:02] Zin nummer 0',
+                                  plain: 'Zin nummer 0', time: Date.now() });
+        return rec;
+    });
+
+    const reply = jobs.beginJob('r', id + 1);
+    const completing = recorder.completeTranscriptColumns(id);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    const waiting = liveStatusText(id, 'translate');
+    ok(generated.length === 0 && waiting === '🌐 The rest follows the reply: English 0 of 30 lines',
+       `after stop: while a reply runs the recording says its translations wait for it, and how many there are (${waiting})`);
+    jobs.endJob('r', id + 1, reply);
+    ok(await until(() => generated.length === 2 && releaseSecond), 'after stop: once the reply is done, the translations go on');
+    const kept = await until(async () => {
+        const live = await db.readLiveTranscript(id);
+        return live.lines.filter(line => line.translations && line.translations.en).length === 24;
+    });
+    const shown = (await row(id)).transcripts.find(item => item.id === 's1');
+    ok(kept && /── English - Engels \(6 lines not translated\) ──/.test(shown.text) && /EN Zin nummer 23/.test(shown.text) && /^── As spoken/.test(shown.text)
+       && /\[00:00-00:02\] Zin nummer 0/.test(shown.text) && shown.plain === 'Zin nummer 0',
+       `after stop: each answer is kept as it comes, and reaches the transcript the row shows, whose words replies use are left alone (${shown.text.slice(0, 160)})`);
+    const liveReading = (await row(id)).transcripts.find(item => item.source === 'L');
+    ok(/EN Zin nummer 23/.test(liveReading.text) && /\[01:32-01:40\] \[not transcribed live\]/.test(liveReading.text),
+       `after stop: and the live reading too, which still marks what the live transcript never heard (${liveReading.text.split('\n').slice(29, 32).join(' / ')})`);
+    eq(liveStatusText(id, 'translate'), '🌐 Translating the rest: English 24 of 30 lines',
+       'after stop: the recording says how far its translations are');
+
+    const sameRecordingReply = jobs.beginJob('r', id);
+    const cross = madeButtons.filter(button => button.className === 'live-status-cancel').pop();
+    ok(cross, 'after stop: the status line has a ✕');
+    cross.fire('click');
+    await completing;
+    document.createElement = realCreateElement;
+    globalThis.fetch = realFetch;
+    const live = await db.readLiveTranscript(id);
+    ok(!jobs.hasJob('f', id) && jobs.hasJob('r', id) && !sameRecordingReply.signal.aborted,
+       'after stop: stopping the translations stops only them, not a reply on the same recording');
+    jobs.endJob('r', id, sameRecordingReply);
+    ok(live.lines.filter(line => line.translations && line.translations.en).length === 24
+       && /EN Zin nummer 23/.test((await row(id)).transcripts.find(item => item.id === 's1').text) && !(await row(id)).fillError,
+       'after stop: and what was translated by then is kept, without a warning on the recording');
+    eq(liveStatusText(id, 'translate'), '', 'after stop: the status line goes when the translations stop');
+}
+
+// A fill whose live transcript is deleted while an answer is on its way ends there, and does not
+// write the live transcript back as a copy nobody can see.
+{
+    await clearAll();
+    const transcribe = await import('../../src/js/transcribe.js');
+    let release = null;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, init = {}) => {
+        const path = String(url);
+        const reply = body => ({ ok: true, status: 200, async json() { return body; }, async text() { return JSON.stringify(body); } });
+        if (path.endsWith('/api/tags')) return reply({ models: [{ name: 'qwen3.8:27b' }] });
+        if (path.endsWith('/api/ps')) return reply({ models: [{ name: 'qwen3.8:27b', size: 1, size_vram: 1 }] });
+        if (path.endsWith('/api/generate')) {
+            const body = JSON.parse(init.body || '{}');
+            if (!release) await new Promise(resolve => { release = resolve; });
+            const numbered = String(body.prompt || '').split('\n').filter(line => /^\d+\. /.test(line))
+                .map(line => line.replace(/^(\d+)\. /, '$1. EN '));
+            return reply({ model: body.model, response: numbered.join('\n'), done: true });
+        }
+        return reply({});
+    };
+    const lines = Array.from({ length: 30 }, (_, i) => ({ key: `d${i}`, startSec: i * 3, endSec: i * 3 + 2,
+                                                         text: `Regel ${i}`, language: 'nl', translations: {} }));
+    const id = await addRecording({ filename: 'deleted live' }, { live: { lines, languages: ['nl', 'en'], coverage: [] } });
+    const filling = transcribe.fillTranslations(id);
+    for (let i = 0; i < 300 && !release; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    await db.deleteLiveTranscript(id);
+    release();
+    const outcome = await filling;
+    globalThis.fetch = realFetch;
+    ok(!(await db.readLiveTranscript(id)) && outcome.cancelled,
+       `fill: a live transcript deleted while an answer was on its way stays deleted, and the fill ends there (${JSON.stringify(outcome)})`);
+
+    // The deletion is asked for at the very moment the change is being made, as when the person
+    // deletes the transcript just as an answer is saved.
+    const raced = await addRecording({ filename: 'raced' }, { live: { lines, languages: ['nl', 'en'], coverage: [] } });
+    let deleting = null;
+    await db.updateLiveTranscript(raced, current => {
+        deleting = db.deleteLiveTranscript(raced);
+        return current && { ...current, touched: true };
+    });
+    await deleting;
+    ok(!(await db.readLiveTranscript(raced)), 'fill: a change to the live transcript that overlaps its deletion does not bring it back');
+}
+
+// With Auto-transcribe on, the reading the row shows is made after the recording; when the live
+// transcript heard everything it is the live lines again, and it carries their translations too.
+{
+    await clearAll();
+    const transcribe = await import('../../src/js/transcribe.js');
+    const id = await addRecording({ filename: 'all heard live', durationMs: 30000 }, {
+        audio: wav(30),
+        live: { lines: [{ startSec: 1, endSec: 9, text: 'Goedemorgen allemaal', language: 'nl', translations: { en: 'Good morning all' } },
+                        { startSec: 11, endSec: 19, text: 'Good morning to you', language: 'en', translations: { nl: 'Goedemorgen' } },
+                        { startSec: 21, endSec: 29, text: 'Tot straks', language: 'nl', translations: {} }],
+                languages: ['nl', 'en'], coverage: [{ fromSec: 0, toSec: 30 }] }
+    });
+    await transcribe.transcribeChunked(id, () => {});
+    const reading = (await row(id)).transcripts[0];
+    ok(reading && reading.source === 'S' && reading.fromLive && /^── As spoken/.test(reading.text)
+       && /── English - Engels \(1 line not translated\) ──\n\[00:01\] Good morning all/.test(reading.text)
+       && /── Nederlands ──/.test(reading.text) && !/Good morning all/.test(reading.plain),
+       `reading: the reading made after the recording from the live lines carries their translations, outside the words replies use (${reading && reading.text})`);
+}
+
 // The rows of recordings that are not finished, as the list draws them.
 {
     await clearAll();
@@ -341,9 +504,11 @@ function zipEntries(bytes) {
     const transcribe = await import('../../src/js/transcribe.js');
     const id = await addRecording({ filename: 'with holes', durationMs: 30000 }, {
         audio: wav(30),
-        live: { lines: [{ startSec: 1, endSec: 4, text: 'the first part was heard' },
-                        { startSec: 13, endSec: 16, text: 'and so was this part' }],
-                languages: [], coverage: [{ fromSec: 0, toSec: 8 }, { fromSec: 12, toSec: 20 }] }
+        live: { lines: [{ startSec: 1, endSec: 4, text: 'the first part was heard', language: 'en',
+                          translations: { nl: 'het eerste deel werd gehoord' } },
+                        { startSec: 13, endSec: 16, text: 'and so was this part', language: 'en',
+                          translations: { nl: 'en dit deel ook' } }],
+                languages: ['en', 'nl'], coverage: [{ fromSec: 0, toSec: 8 }, { fromSec: 12, toSec: 20 }] }
     });
     await transcribe.storeLiveTranscript(id);
     const live = (await row(id)).transcripts[0];
@@ -377,6 +542,9 @@ function zipEntries(bytes) {
     ok(filled && filled.source === 'S' && filled.fromLive && /the first part was heard/.test(filled.plain)
        && /filled in/.test(filled.plain) && !/not transcribed live/.test(filled.text),
        `holes: and the reading it stores keeps the live lines and fills the holes (${filled && filled.text})`);
+    ok(/^── As spoken/.test(filled.text) && /── Nederlands - Dutch ──\n\[00:01\] het eerste deel werd gehoord/.test(filled.text)
+       && !/eerste deel/.test(filled.plain),
+       `holes: it carries the translations the boxes made, as the live reading does, outside the words replies use (${filled && filled.text})`);
     await gui.renderList({ force: true });
     await settle();
     ok(!/📝 Fill gaps/.test((rowNode() || {}).innerHTML || ''), 'holes: after which the row stops offering it');

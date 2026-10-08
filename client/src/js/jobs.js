@@ -14,7 +14,7 @@ export function endJob(kind, recId, controller = null) {
     return controllers.delete(k);
 }
 
-function cancelJob(kind, recId) {
+export function cancelJob(kind, recId) {
     const k = key(kind, recId);
     const controller = controllers.get(k);
     if (!controller) return false;

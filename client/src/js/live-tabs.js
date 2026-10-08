@@ -489,11 +489,20 @@ function reportPopupFailure(win) {
   console.error('Live view popup never loaded:', message);
 }
 
+// The text each status bar shows now, so a list repaint that rebuilds the row can put it back as it
+// was, rather than with a generic label until the job next reports.
+const _statusTexts = new Map();
+const statusKey = (recId, type) => `${type}-${Number(recId)}`;
+
+export function liveStatusText(recId, type) {
+  return _statusTexts.get(statusKey(recId, type)) || '';
+}
+
 export function showLiveStatus(recId, type, initialText, onClick, onCancel) {
+  removeLiveStatus(recId, type);
+  _statusTexts.set(statusKey(recId, type), initialText);
   const container = document.getElementById(`rec-${recId}`);
   if (!container) return null;
-
-  removeLiveStatus(recId, type);
 
   const bar = document.createElement('div');
   bar.className = `live-status live-status-${type}`;
@@ -536,6 +545,8 @@ export function showLiveStatus(recId, type, initialText, onClick, onCancel) {
 }
 
 export function updateLiveStatus(recId, type, text) {
+  const key = statusKey(recId, type);
+  if (_statusTexts.has(key)) _statusTexts.set(key, text);
   const bar = document.getElementById(`live-status-${type}-${recId}`);
   if (!bar) return;
   const span = bar.querySelector('.live-status-text');
@@ -543,6 +554,7 @@ export function updateLiveStatus(recId, type, text) {
 }
 
 export function removeLiveStatus(recId, type) {
+  _statusTexts.delete(statusKey(recId, type));
   const bar = document.getElementById(`live-status-${type}-${recId}`);
   if (bar) bar.remove();
 }

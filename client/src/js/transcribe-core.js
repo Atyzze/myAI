@@ -1,6 +1,6 @@
 import { fmtDur }                from './config.js';
 import { seamTrim }              from './dedup.js';
-import { buildFinalPrompt, parseBatchResponse, languageName,
+import { buildFinalPrompt, parseBatchResponse, languageName, languageLabel,
          TRANSLATE_BATCH_LINES } from './translate-core.js';
 
 export function planAudioChunks(totalSamples, sampleRate, stepSec = 60, overlapSec = 3) {
@@ -111,6 +111,50 @@ export function invertCoverage(coverage, totalSec, minGapSec = 1) {
 export function liveHoles(coverage, totalSec, minGapSec = 1) {
     if (!Array.isArray(coverage) || coverage.length === 0) return [];
     return invertCoverage(coverage, totalSec, minGapSec);
+}
+
+export const AS_SPOKEN_HEADER = '── As spoken (each line in the language it was said in) ──';
+
+// A reading made from the live transcript, with a section per language the translation boxes
+// worked in after the lines as spoken. `plain`, which replies are written from, stays words only.
+export function withTranslations(assembled, live) {
+    const lines = (live && live.lines) || [];
+    const languages = (live && live.languages) || [];
+    const useful = languages.filter(code =>
+        lines.some(line => line.translations && line.translations[code]));
+    if (!useful.length) return assembled;
+    const base = (lines.find(line => line.language) || {}).language || languages[0] || '';
+
+    const section = code => {
+        let carried = 0;
+        const body = lines.map(line => {
+            const done = line.translations && line.translations[code];
+            const spoken = (line.language || '').toLowerCase();
+            const foreign = !done && spoken && spoken !== code.toLowerCase();
+            if (foreign) carried++;
+            return `[${fmtDur((line.startSec || 0) * 1000)}] `
+                + (foreign ? `[${spoken}] ` : '') + (done || line.text || '');
+        }).join('\n');
+        const note = carried
+            ? ` (${carried} line${carried === 1 ? '' : 's'} not translated)` : '';
+        return `\n\n── ${languageLabel(code, base)}${note} ──\n${body}`;
+    };
+    const spoken = assembled.timestamped || assembled.plain || '';
+    return {
+        timestamped: `${AS_SPOKEN_HEADER}\n${spoken}` + useful.map(section).join(''),
+        plain: assembled.plain || ''
+    };
+}
+
+// The lines as spoken of a reading that may carry language sections, so they can be put together
+// again with newer translations.
+export function spokenPart(text) {
+    const value = String(text || '');
+    const head = `${AS_SPOKEN_HEADER}\n`;
+    if (!value.startsWith(head)) return value;
+    const rest = value.slice(head.length);
+    const end = rest.indexOf('\n\n── ');
+    return end < 0 ? rest : rest.slice(0, end);
 }
 
 export function holeResults(holes) {
@@ -627,8 +671,21 @@ function isCancel(err, signal) {
     return !!(signal && signal.aborted) || !!(err && err.name === 'AbortError');
 }
 
+// The status line of the fill that runs after a recording: which language, how far, and whether it
+// is waiting for a reply to finish first.
+export function describeFillProgress(progress, { waiting = false } = {}) {
+    const lead = waiting ? '🌐 The rest follows the reply' : '🌐 Translating the rest';
+    if (!progress || !progress.target) return `${lead}…`;
+    const language = languageName(progress.target);
+    if (progress.retrying) return `${lead}: ${language}, ${progress.retrying} line(s) once more`;
+    return `${lead}: ${language} ${progress.done} of ${progress.total} lines`;
+}
+
+// `onProgress` hears { target, done, total } before each request ({ target, retrying } for a batch
+// tried again at the end); `onBatch(target, { index: text })` is given each answer as it comes, so the
+// caller can keep what was done even if the fill is stopped or its tab closed before it ends.
 export async function fillMissingTranslations(lines, languages, translate, {
-    batchLines = FINAL_BATCH_LINES, onProgress = () => {}, signal = null,
+    batchLines = FINAL_BATCH_LINES, onProgress = () => {}, onBatch = null, signal = null,
     limit = TRANSLATE_FILL_FAILURE_LIMIT, waitBeforeEachRequest = null
 } = {}) {
     const list = lines || [];
@@ -639,6 +696,19 @@ export async function fillMissingTranslations(lines, languages, translate, {
     let breaker = initialFillBreaker();
     const unansweredBatchesToRetryAtEnd = [];
     const outcome = extra => ({ filled, done, missing, requests, stopped: null, cancelled: false, ...extra });
+    const keep = async (target, answers) => {
+        if (typeof onBatch === 'function' && Object.keys(answers).length) await onBatch(target, answers);
+    };
+    const take = async (target, batch, parsed) => {
+        const answers = {};
+        batch.forEach((item, i) => {
+            if (!parsed[i]) { missing++; return; }
+            filled[target][item.index] = parsed[i];
+            answers[item.index] = parsed[i];
+            done++;
+        });
+        await keep(target, answers);
+    };
 
     const ask = async (items, target) => {
         if (typeof waitBeforeEachRequest === 'function') await waitBeforeEachRequest();
@@ -662,8 +732,11 @@ export async function fillMissingTranslations(lines, languages, translate, {
             if (breaker.broken) {
                 return outcome({ missing: missing + 1, stopped: describeFillStopped(breaker.failures) });
             }
-            if (one.parsed && one.parsed[0]) { filled[target][item.index] = one.parsed[0]; done++; }
-            else missing++;
+            if (one.parsed && one.parsed[0]) {
+                filled[target][item.index] = one.parsed[0];
+                done++;
+                await keep(target, { [item.index]: one.parsed[0] });
+            } else missing++;
         }
         return null;
     };
@@ -684,18 +757,14 @@ export async function fillMissingTranslations(lines, languages, translate, {
             for (let at = 0; at < gaps.length; at += size) {
                 if (signal && signal.aborted) return outcome({ cancelled: true });
                 const batch = gaps.slice(at, at + size);
-                onProgress(`Completing ${languageName(target)}: ${at + batch.length} of ${gaps.length}`);
+                onProgress({ target, done: at, total: gaps.length });
                 const first = await ask(batch, target);
                 breaker = nextFillBreaker(breaker, first.reached, limit);
                 if (breaker.broken) {
                     return outcome({ missing: missing + batch.length, stopped: describeFillStopped(breaker.failures) });
                 }
                 if (first.parsed) {
-                    batch.forEach((item, i) => {
-                        if (!first.parsed[i]) { missing++; return; }
-                        filled[target][item.index] = first.parsed[i];
-                        done++;
-                    });
+                    await take(target, batch, first.parsed);
                     continue;
                 }
                 if (!first.reached) {
@@ -708,7 +777,7 @@ export async function fillMissingTranslations(lines, languages, translate, {
         }
         for (const [n, { batch, target }] of unansweredBatchesToRetryAtEnd.entries()) {
             if (signal && signal.aborted) return outcome({ cancelled: true });
-            onProgress(`Completing ${languageName(target)}: trying ${batch.length} line(s) again`);
+            onProgress({ target, retrying: batch.length });
             const again = await ask(batch, target);
             breaker = nextFillBreaker(breaker, again.reached, limit);
             if (breaker.broken) {
@@ -716,11 +785,7 @@ export async function fillMissingTranslations(lines, languages, translate, {
                 return outcome({ missing: missing + batch.length + untried, stopped: describeFillStopped(breaker.failures) });
             }
             if (again.parsed) {
-                batch.forEach((item, i) => {
-                    if (!again.parsed[i]) { missing++; return; }
-                    filled[target][item.index] = again.parsed[i];
-                    done++;
-                });
+                await take(target, batch, again.parsed);
             } else if (again.reached) {
                 const broken = await lineByLine(batch, target);
                 if (broken) return broken;

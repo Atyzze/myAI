@@ -2180,7 +2180,7 @@ await testStitch();
     ok(!updateBlocked(ready, { recording: false }), 'update: and allowed when nothing is being recorded');
     ok(!updateBlocked(installing, { recording: true }),
        'update: there is nothing to block while a build is still downloading');
-    ok(/a recording, its save, a transcription, a reply or a backup/.test(describeBlockedUpdate(ready))
+    ok(/a recording, its save, a transcription, a reply, finishing translations or a backup/.test(describeBlockedUpdate(ready))
        && /Let it finish or stop it/.test(describeBlockedUpdate(ready)),
        'update: and the refusal says what to do about it');
     ok(/v97/.test(describeBlockedUpdate(ready)), 'update: naming what is waiting');
@@ -3806,6 +3806,60 @@ function throws(fn, name) {
     const waited = await filling;
     ok(sentWhileHeld === 0 && waited.done === 6,
        'fill: while the caller holds it back, for a reply that is running, no translation is sent; afterwards all of it is');
+
+    const keptAnswers = [];
+    const progress = [];
+    let asked = 0;
+    const halfShaped = async (prompt, count) => {
+        asked++;
+        if (asked === 1) throw new Error('Translation failed (HTTP 502)');
+        if (asked === 2 && count > 1) return 'Sure! Here you go.';
+        return reply(prompt);
+    };
+    const kept = await fillMissingTranslations(lines, ['nl', 'en'], halfShaped, {
+        batchLines: 2,
+        onProgress: step => progress.push(step),
+        onBatch: async (target, answers) => { keptAnswers.push([target, Object.keys(answers).map(Number)]); }
+    });
+    const keptIndexes = keptAnswers.flatMap(([, indexes]) => indexes).sort((a, b) => a - b);
+    ok(kept.done === 6 && keptIndexes.join(',') === '0,1,2,3,4,5' && keptAnswers.every(([target]) => target === 'en'),
+       `fill: every answer is handed over as it comes, whether from a batch, line by line, or a batch tried again at the end (${JSON.stringify(keptAnswers)})`);
+    ok(keptAnswers.length >= 3 && keptAnswers.some(([, indexes]) => indexes.length === 1),
+       'fill: one hand-over per answer, not one at the end');
+    eq(progress.filter(step => !step.retrying).map(step => `${step.target} ${step.done}/${step.total}`).join(' '),
+       'en 0/6 en 2/6 en 4/6', 'fill: before each request it says which language and how many lines are done');
+    ok(progress.some(step => step.retrying === 2), 'fill: and when a batch is tried again at the end, how many lines');
+
+    const { describeFillProgress } = await import('../../src/js/transcribe-core.js');
+    eq(describeFillProgress({ target: 'en', done: 24, total: 30 }), '🌐 Translating the rest: English 24 of 30 lines',
+       'fill status: the language and how far');
+    eq(describeFillProgress({ target: 'nl', done: 0, total: 640 }, { waiting: true }),
+       '🌐 The rest follows the reply: Nederlands 0 of 640 lines',
+       'fill status: while a reply runs, that the translations wait for it');
+    eq(describeFillProgress({ target: 'en', retrying: 3 }), '🌐 Translating the rest: English, 3 line(s) once more',
+       'fill status: a batch tried again');
+    eq(describeFillProgress(null), '🌐 Translating the rest…', 'fill status: before it has started');
+}
+
+{
+    const { withTranslations, spokenPart, AS_SPOKEN_HEADER } = await import('../../src/js/transcribe-core.js');
+    const spoken = { timestamped: '[00:00-00:02] Goedemorgen\n[00:03-00:05] Good morning', plain: 'Goedemorgen Good morning' };
+    const live = done => ({ languages: ['nl', 'en'], lines: [
+        { startSec: 0, text: 'Goedemorgen', language: 'nl', translations: done ? { en: 'Good morning' } : {} },
+        { startSec: 3, text: 'Good morning', language: 'en', translations: { nl: 'Goedemorgen' } },
+        { startSec: 6, text: 'Tot ziens', language: 'nl', translations: { en: 'Goodbye' } }
+    ] });
+    const before = withTranslations(spoken, live(false));
+    ok(before.timestamped.startsWith(`${AS_SPOKEN_HEADER}\n${spoken.timestamped}\n\n── `) && before.plain === spoken.plain,
+       'reading: the lines as spoken come first, then a section per language, and the words replies use stay words only');
+    ok(/── English - Engels \(1 line not translated\) ──\n\[00:00\] \[nl\] Goedemorgen/.test(before.timestamped),
+       `reading: a line not translated yet says so and is shown as spoken (${before.timestamped.split('\n').slice(-3).join(' / ')})`);
+    eq(spokenPart(before.timestamped), spoken.timestamped, 'reading: the lines as spoken can be taken back out of it');
+    eq(spokenPart(spoken.timestamped), spoken.timestamped, 'reading: a reading without sections is all lines as spoken');
+    const after = withTranslations({ timestamped: spokenPart(before.timestamped), plain: before.plain }, live(true));
+    ok(/── English - Engels ──\n\[00:00\] Good morning/.test(after.timestamped) && !/not translated/.test(after.timestamped)
+       && spokenPart(after.timestamped) === spoken.timestamped,
+       'reading: put together again with newer translations, its sections are replaced, not added to');
 }
 
 {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="139">
+<meta name="myai-build" content="140">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -183,6 +183,9 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .live-status-scribe:hover { background: #0f2a33; }
 .live-status-reply { background: #1a1400; border: 1px solid #ffa726; color: #ffa726; }
 .live-status-reply:hover { background: #2a1e00; }
+.live-status-translate { background: #120f1f; border: 1px solid #b39ddb; color: #b39ddb; }
+.live-status-translate .live-status-main { cursor: default; }
+.live-status-translate .live-status-text { white-space: normal; }
 .live-status .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse-dot 1.2s ease-in-out infinite; flex-shrink: 0; }
 
 .live-inline { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75); z-index: 400; align-items: center; justify-content: center; padding: 12px; }
@@ -445,7 +448,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <p>Updates never delete your notes. A release that changes how notes are stored only adds what it needs and leaves everything already saved in place. If a newer version opens while another tab is recording or still working on a note, that tab goes first: the newer version waits, and starts by itself as soon as the recording, and anything it started such as automatic transcription, has finished.</p>
 
     <h3>⬇️ Updates</h3>
-    <p>The version under ❓ is the build this page is running. While the app is open it looks for a newer build every half hour, and a tap on the version checks right away. A newer build is downloaded in the background and offered: the version then reads <strong>this build › the new build</strong>. It is put in use only when you tap it, never by itself: not by closing and reopening the app, not by an ordinary reload. A version shown on its own is always the code actually running, so it never needs a second refresh. Nothing reloads by itself, and nothing reloads at all while this tab is recording, saving a recording, transcribing, writing a reply or making a backup. The second tap then says so; tap once more when that work has finished.</p>
+    <p>The version under ❓ is the build this page is running. While the app is open it looks for a newer build every half hour, and a tap on the version checks right away. A newer build is downloaded in the background and offered: the version then reads <strong>this build › the new build</strong>. It is put in use only when you tap it, never by itself: not by closing and reopening the app, not by an ordinary reload. A version shown on its own is always the code actually running, so it never needs a second refresh. Nothing reloads by itself, and nothing reloads at all while this tab is recording, saving a recording, transcribing, writing a reply, finishing translations or making a backup. The second tap then says so; tap once more when that work has finished.</p>
     <p>If a browser keeps serving its own cached copy of the app and refuses the new build, the second tap clears the installed shell and loads it from the server. Recordings, transcripts and settings are not touched by that.</p>
 
     <h3>💾 Space</h3>
@@ -585,7 +588,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
         <option value="3">3 panels</option>
         <option value="4">4 panels</option>
       </select>
-      <div class="settings-hint">One panel per language heard, showing every line in that language; other lines are translated and tagged. Translation runs continuously on your reply server. While that server is down or busy, lines wait and are translated when it answers again, however far up they have scrolled.</div>
+      <div class="settings-hint">One panel per language heard, showing every line in that language; other lines are translated and tagged. Translation runs continuously on your reply server. While that server is down or busy, lines wait and are translated when it answers again, however far up they have scrolled. Lines still waiting at Stop are translated after the recording, after its reply: the recording then shows 🌐 Translating the rest and how far it is, ✕ stops it and keeps what was done, and the translations appear in the transcript the recording shows.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-section-label">Your data lives in this browser</div>

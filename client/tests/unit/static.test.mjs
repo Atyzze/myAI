@@ -612,6 +612,15 @@ const columns = blockAt(recorderSource, /async function completeTranscriptColumn
 ok(/rec\.fillError = result\.stopped;/.test(columns) && !/rec\.pipelineError/.test(columns)
    && /rec\.fillError\s*\n?\s*\? `<div class="rec-warning" role="status">\$\{escapeHtml\(rec\.fillError\)\}<\/div>`/.test(read('src/js/gui.js')),
    'a translation fill that had to stop says so in a notice of its own, which the next transcription or reply does not wipe');
+ok(/fillTranslations\(recId, \{\n\s*onProgress: text => \{/.test(columns)
+   && /showLiveStatus\(recId, 'translate', text, null, \(\) => cancelJob\('f', recId\)\)/.test(columns)
+   && /\} finally \{\n\s*removeLiveStatus\(recId, 'translate'\);/.test(columns),
+   'the translations finished after a recording show on it while they run, and their ✕ stops only them, not a transcription or reply');
+ok(/showLiveStatus\(rec\.id, 'translate', liveStatusText\(rec\.id, 'translate'\) \|\| describeFillProgress\(null\),\n\s*null, \(\) => cancelJob\('f', rec\.id\)\)/.test(guiSource)
+   && /if \(hasJob\('f', rec\.id\)\) \{/.test(guiSource),
+   'and a repaint of the list puts their status line back as it was, with the same ✕');
+ok(/function requestTranslations\(rows, target\) \{[\s\S]{0,400}?if \(!state\.active \|\| state\.stopping\) return;/.test(scribe),
+   'once Stop is finishing the last windows nothing new is sent to be translated, since no answer could reach what is saved; what is left is translated after the recording');
 
 const guiNow = read('src/js/gui.js');
 const mainNowSource = read('src/js/main.js');

@@ -19,13 +19,13 @@ import { waveformFps, nextWaveFrame, waveWaitMs,
          refreshRateHz, WAVEFORM_HIDDEN_EVENT }    from './waveform-core.js';
 import { runAutoPipeline }                         from './auto-pipeline.js';
 import { storeLiveTranscript, transcribeChunked,
-         fillTranslations, refreshLiveTranscript }  from './transcribe.js';
+         fillTranslations, refreshLiveReadings }  from './transcribe.js';
 import { startLiveScribe, stopLiveScribe, flushLiveScribe, closeLiveScribe, pauseLiveScribe,
          pushLivePcm, isLiveScribeActive, liveScribeResult, liveTranscriptSizeAndSignature,
          setLiveScribeAudioSource, backfillLiveScribe,
          noteLiveSystemLine as liveScribeSystemNote } from './live-scribe.js';
-import { singleFlight, runInOrderUntilCancelled, hasJob, CANCELLED } from './jobs.js';
-import { showLiveStatus, updateLiveStatus, removeLiveStatus, openLiveLogTab } from './live-tabs.js';
+import { singleFlight, runInOrderUntilCancelled, hasJob, cancelJob, CANCELLED } from './jobs.js';
+import { showLiveStatus, updateLiveStatus, removeLiveStatus, liveStatusText, openLiveLogTab } from './live-tabs.js';
 import { transcriptsAfterCleanup }                from './transcribe-core.js';
 import { liveTranscriptAfterCleanup }             from './deletion-core.js';
 import { enableWakeLock, disableWakeLock }         from './wake-lock.js';
@@ -767,9 +767,25 @@ function returnToMainView() {
     try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (_) { try { window.scrollTo(0, 0); } catch (_) {} }
 }
 
-async function completeTranscriptColumns(recId) {
-    const result = await fillTranslations(recId);
-    if (result.cancelled) return;
+// After a recording with translation boxes, the languages the boxes did not finish are completed
+// here, after any reply. It shows on the recording while it runs, with a ✕ that stops only it; what
+// was translated by then is kept, and the transcript on the row shows it.
+export async function completeTranscriptColumns(recId) {
+    let result;
+    try {
+        result = await fillTranslations(recId, {
+            onProgress: text => {
+                if (liveStatusText(recId, 'translate')) updateLiveStatus(recId, 'translate', text);
+                else showLiveStatus(recId, 'translate', text, null, () => cancelJob('f', recId));
+            }
+        });
+    } finally {
+        removeLiveStatus(recId, 'translate');
+    }
+    if (result.cancelled) {
+        if (result.filled) await _renderList({ force: true });
+        return;
+    }
     const fillNoticeChanged = await dbUpdate(CONFIG.STORE_REC, recId, rec => {
         if (!rec || rec.deleting) return null;
         if (result.stopped) {
@@ -786,7 +802,7 @@ async function completeTranscriptColumns(recId) {
         if (fillNoticeChanged) await _renderList({ force: true });
         return;
     }
-    await refreshLiveTranscript(recId);
+    await refreshLiveReadings(recId);
     await _renderList({ force: true });
     console.info(`Transcript columns completed: ${result.filled} line(s) translated`
         + (result.missing ? `, ${result.missing} could not be` : ''));
