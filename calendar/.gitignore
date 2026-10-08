@@ -1,0 +1,13 @@
+# Generated test/release state
+artifacts/
+node_modules/
+*.zip
+*.zip.sha256
+.release_journal.json
+__pycache__/
+*.pyc
+
+# Editor/OS state
+.DS_Store
+*.swp
+*.tmp

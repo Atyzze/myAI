@@ -97,6 +97,8 @@
         {
           inherit (myai)
             client
+            calendar
+            radicale
             vts
             probe
             models

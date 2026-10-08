@@ -63,6 +63,7 @@ let
   manifest = pkgs.writeText "manifest.json" (
     builtins.toJSON {
       client_build = myai.client.version;
+      calendar_build = myai.calendar.version;
       vts_build = myai.vts.version;
       nixos = config.system.nixos.release;
       accelerators = cfg.accelerators;
@@ -76,6 +77,8 @@ let
       app/     what runs: the web app, pipeline definitions, models.
                Only the update manager writes here.
       input/   put files here. A pipeline tunes into input/<name>/ and only reads.
+               input/calendar/ holds everyone's calendars (one .ics file per event);
+               only the calendar server writes there.
       output/  results. Each pipeline writes only output/<its name>/; nobody
                else writes here.
 
@@ -374,6 +377,7 @@ in
       before = [ "nginx.service" ];
       restartTriggers = [
         myai.client
+        myai.calendar
         manifest
       ]
       ++ mapAttrsToList definitionFile pipelines;
@@ -389,6 +393,7 @@ in
         app=${root}/app
         swap() { mv -fT "$1" "$2"; }
         ln -sfn ${myai.client} "$app/.client.new" && swap "$app/.client.new" "$app/client"
+        ln -sfn ${myai.calendar} "$app/.calendar.new" && swap "$app/.calendar.new" "$app/calendar"
         install -m 0644 ${manifest} "$app/.manifest.new" && swap "$app/.manifest.new" "$app/manifest.json"
         install -m 0644 ${readme} "$app/.readme.new" && swap "$app/.readme.new" "$app/README.txt"
         keep=""

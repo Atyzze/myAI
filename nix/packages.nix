@@ -59,6 +59,19 @@ let
 
   fetchPython = pkgs.python3.withPackages (ps: [ ps.huggingface-hub ]);
 
+  # The calendar server's Python, with vobject patched (vobject-keep-values.patch): vobject 0.9.9
+  # cuts a property's value at its first comma when the value is not text, so an iPhone's saved
+  # place ("geo:52.37,4.89") would lose its longitude the first time the box stored the event.
+  # vobject's and Radicale's own test suites pass with it.
+  calendarPython = pkgs.python3.override {
+    self = calendarPython;
+    packageOverrides = _final: prev: {
+      vobject = prev.vobject.overridePythonAttrs (old: {
+        patches = (old.patches or [ ]) ++ [ ./vobject-keep-values.patch ];
+      });
+    };
+  };
+
   buildNumber = dir: lib.strings.trim (builtins.readFile (src + "/${dir}/BUILD_NUMBER"));
 
   ollamaVariants = {
@@ -82,6 +95,23 @@ rec {
       runHook postInstall
     '';
   };
+
+  # The calendar app: static files, served by nginx at /calendar/ (calendar.nix).
+  calendar = pkgs.stdenvNoCC.mkDerivation {
+    pname = "myai-calendar";
+    version = buildNumber "calendar";
+    src = src + "/calendar";
+    dontBuild = true;
+    installPhase = ''
+      runHook preInstall
+      mkdir -p $out
+      cp -r index.html manifest.webmanifest sw.js assets src BUILD_NUMBER $out/
+      runHook postInstall
+    '';
+  };
+
+  # The calendar server (CalDAV), with the patched vobject.
+  radicale = pkgs.radicale.override { python3 = calendarPython; };
 
   # VTS with its runtime. server.py is started unchanged; VTS_SYSTEM_PYTHON=1
   # tells it the interpreter already has every dependency (no .venv).
@@ -130,7 +160,7 @@ rec {
   };
 
   # The three-folder tools: the pipeline runner, the feed builder, the email
-  # notifier and the backup loop. Standard library only.
+  # notifier, the backup loop, and the calendar accounts. Standard library only.
   tools = pkgs.stdenvNoCC.mkDerivation {
     pname = "myai-tools";
     version = buildNumber "client";
@@ -142,6 +172,7 @@ rec {
       install -Dm755 myai_feed.py $out/bin/myai-feed
       install -Dm755 myai_notify.py $out/bin/myai-notify
       install -Dm755 myai_backup.py $out/bin/myai-backup
+      install -Dm755 myai_calendar.py $out/bin/myai-calendar
     '';
   };
 
@@ -188,13 +219,17 @@ rec {
       pkgs.rsync
       pkgs.ffmpeg-headless
     ];
+    # The calendar's sync tests run against this box's own Radicale build.
+    MYAI_RADICALE_PYTHON = "${calendarPython.withPackages (ps: [ (ps.toPythonModule radicale) ])}/bin/python";
+    MYAI_STRICT_TESTS = "1";
   } ''
     export HOME=$TMPDIR
-    cp -r ${src}/box ${src}/vts ${src}/client .
+    cp -r ${src}/box ${src}/vts ${src}/client ${src}/calendar ${src}/nix .
     chmod -R u+w .
     (cd box && python3 -m unittest discover -s tests)
     (cd vts && python3 -m unittest discover -s tests)
-    (cd client && npm run -s test:unit)
+    (cd client && MYAI_STRICT_TESTS= npm run -s test:unit)
+    (cd calendar && npm run -s test:unit && npm run -s test:sync)
     touch $out
   '';
 }

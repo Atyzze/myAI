@@ -1,0 +1,21 @@
+{
+  "name": "myai-calendar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Your own calendar on the myAI box: a CalDAV server (Radicale) holds it, this static app shows and edits it on every device, offline too.",
+  "scripts": {
+    "test": "node tests/run-all.mjs",
+    "test:portable": "node tests/run-all.mjs --portable",
+    "test:unit": "node tests/unit/core.test.mjs && node tests/unit/series-edit.test.mjs && node tests/unit/ui-core.test.mjs && node tests/unit/sync-fake.test.mjs && node tests/unit/static.test.mjs",
+    "test:sync": "node tests/integration/sync-radicale.mjs",
+    "test:browser": "node tests/integration/browser-calendar.mjs",
+    "test:update": "node tests/integration/shell-update.mjs",
+    "test:mutation": "node tests/mutation/mutation-smoke.mjs",
+    "serve": "node tests/helpers/dev-server.mjs",
+    "release": "python3 tools/package_release.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

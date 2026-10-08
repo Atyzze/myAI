@@ -1,0 +1,40 @@
+--- a/vobject/icalendar.py
++++ b/vobject/icalendar.py
+@@ -650,6 +650,12 @@
+             super(RecurringComponent, self).__setattr__(name, value)
+ 
+ 
++def _is_text_value(line):
++    """Whether a property's value is TEXT (the default), as opposed to VALUE=URI and the like."""
++    value_type = getattr(line, 'value_param', None)
++    return not value_type or value_type.upper() == 'TEXT'
++
++
+ class TextBehavior(behavior.Behavior):
+     """
+     Provide backslash escape encoding/decoding for single valued properties.
+@@ -668,8 +674,14 @@
+             encoding = getattr(line, 'encoding_param', None)
+             if encoding and encoding.upper() == cls.base64string:
+                 line.value = base64.b64decode(line.value)
++            elif not _is_text_value(line):
++                # A URI (Apple's "geo:52.37,4.89") or other non-TEXT value has no
++                # backslash escapes, and its commas are part of it.
++                pass
+             else:
+-                line.value = stringToTextValues(line.value)[0]
++                # Unescaped commas in a single TEXT value are kept as text rather
++                # than dropping everything after the first one.
++                line.value = ','.join(stringToTextValues(line.value))
+             line.encoded = False
+ 
+     @classmethod
+@@ -681,6 +693,8 @@
+             encoding = getattr(line, 'encoding_param', None)
+             if encoding and encoding.upper() == cls.base64string:
+                 line.value = base64.b64encode(line.value.encode('utf-8')).decode('utf-8').replace('\n', '')
++            elif not _is_text_value(line):
++                pass
+             else:
+                 line.value = backslashEscape(line.value)
+             line.encoded = True

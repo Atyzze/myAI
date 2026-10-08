@@ -1,15 +1,17 @@
 # myAI
 
-Private voice notes, live transcription, live translation and AI replies, on a box you own. Talk to it from any device, anywhere, over your own tailnet; nothing leaves the box unless you send it somewhere.
+Private voice notes, live transcription, live translation and AI replies, and your own calendar, on a box you own. Talk to it from any device, anywhere, over your own tailnet; nothing leaves the box unless you send it somewhere.
 
 One image runs on almost anything: a workstation with a big NVIDIA card, a gaming PC, a laptop with integrated graphics, a Raspberry Pi. The box measures its own hardware at boot and sizes everything to it: which Whisper model, which AI model, how many translation boxes the app may open, how much runs in parallel. A small box never refuses to run; it uses smaller models and says so in plain words.
 
 ```
 client/   the browser app (PWA): recording, live transcript, up to 4 live translation
           boxes, speaker numbers, replies, hands-free auto-scroll of opened texts; updates only on your tap. Build 140.
+calendar/ the calendar app (PWA): month, week, day and list, repeats, reminders, places,
+          the same on every device and offline; the calendar itself lives on the box (CalDAV). Build 1.
 vts/      VTS, the in-memory Whisper transcription server. Build 23.
 box/      what makes a box: hardware probe, model fetcher, pipeline runner, feeds,
-          email notifier, backup loop, status screen. Python standard library only.
+          email notifier, backup loop, calendar accounts, status screen. Python standard library only.
 nix/      the NixOS module and the box definition.
 flake.nix images, packages, checks.
 ```
@@ -56,11 +58,12 @@ Before the first boot, open the stick's small FAT partition on any computer and 
 | `wifi.txt` | `ssid=...` and `password=...` lines; removed once used |
 | `authorized_keys` | SSH keys for root (over the tailnet only) |
 | `drop_authorized_keys` | SSH keys for the SFTP drop box |
+| `calendar-users.txt` | calendar accounts, one `name password` per line; removed once used |
 | `overrides.json` | e.g. `{"llm_model": "qwen3:8b", "whisper_model": "small"}` |
 
 Without an auth key, the box's own screen shows its status and **[L]** shows a QR code: scan it with your phone, log in to Tailscale, done. On first boot it downloads the models it planned for (this needs internet once).
 
-Then open `https://myai.<your-tailnet>.ts.net` on your phone or computer. On the local network it is also at `https://<its IP>` and `https://myai.local` (self-signed certificate; the browser asks once).
+Then open `https://myai.<your-tailnet>.ts.net` on your phone or computer. On the local network it is also at `https://<its IP>` and `https://myai.local` (self-signed certificate; the browser asks once). The calendar is at `/calendar/`.
 
 Already on NixOS? Add `nixosModules.default` and set `services.myai.enable = true;` (see `nix/module.nix` for every option).
 
@@ -98,6 +101,22 @@ services.myai.pipelines.dictation = {
 };
 ```
 
+## The calendar
+
+A browser may clear what a web app stores at any moment, so a calendar cannot live in one. Here
+it lives on the box: a CalDAV server (Radicale, on loopback behind nginx at `/dav/`) keeps every
+event as a plain `.ics` file in `input/calendar/`, and the backups carry it like everything else.
+The calendar app at `/calendar/` keeps a copy on each device, so it opens at once and works offline,
+and sends what changed when it can; the same calendar is on your phone, laptop and desktop. Connect
+the phone's own calendar app to the same `/dav/` address (the iPhone has CalDAV built in; Android
+uses DAVx⁵) and its reminders go off on time even with the app closed.
+
+```bash
+sudo myai-calendar add anna     # an account; each sees only their own calendars
+```
+
+More in [calendar/README.md](calendar/README.md).
+
 ## Events, feeds and email
 
 Every pipeline appends what happened to `output/<name>/events.jsonl`. From those:
@@ -125,16 +144,18 @@ services.myai.backup.target = "/mnt/backup";   # chown myai-backup; touch .myai-
 ## Privacy and access
 
 - The app records in your browser. Audio goes to VTS, which holds it in RAM only, refuses to persist anything, and keeps it out of swap; nginx is configured so request bodies never touch disk either.
-- The only ways in are Tailscale (who may connect is your tailnet's access control) and, optionally, the local network for the app itself. `/output/`, `/feeds/` and SSH are tailnet only.
+- The only ways in are Tailscale (who may connect is your tailnet's access control) and, optionally, the local network for the apps themselves. `/output/`, `/feeds/` and SSH are tailnet only.
+- Calendars are reached only with an account's name and password, and each account sees only its own; `input/calendar/` is readable by the calendar server and the backup alone.
 - Pipelines, feeds, email and backups each run as their own user with their own single writable folder. That is the compartment model: an AI processor can be given exactly the inputs it needs and nothing else, and backups never involve an AI at all.
 
 ## Develop
 
 ```bash
-nix flake check                         # box, VTS and client unit tests, and the lite system
+nix flake check                         # box, VTS, client and calendar tests, and the lite system
 (cd client && npm test)                 # the client's full gate (needs browsers for integration)
+(cd calendar && npm test)               # the calendar's full gate (Radicale and Chromium)
 (cd vts && python3 -m unittest discover -s tests)
 (cd box && python3 -m unittest discover -s tests)
 ```
 
-Each part keeps its own release discipline: `client/` and `vts/` have their own `BUILD_NUMBER`, build notes and release packager. Where this is heading is in [ROADMAP.md](ROADMAP.md).
+Each part keeps its own release discipline: `client/`, `calendar/` and `vts/` have their own `BUILD_NUMBER`, build notes and release packager. Where this is heading is in [ROADMAP.md](ROADMAP.md).

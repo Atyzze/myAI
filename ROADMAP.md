@@ -1,6 +1,6 @@
 # Roadmap
 
-What exists today is in the [README](README.md): one image for almost any hardware, the voice app, VTS, Ollama, the three folders with enforced rules, the transcribe pipeline, feeds, email and backups. These are the next tracks, roughly in the order they build on each other. Each is a design sketch, not a promise.
+What exists today is in the [README](README.md): one image for almost any hardware, the voice app, the calendar, VTS, Ollama, the three folders with enforced rules, the transcribe pipeline, feeds, email and backups. These are the next tracks, roughly in the order they build on each other. Each is a design sketch, not a promise.
 
 ## 1. More pipelines on the three folders
 
@@ -11,7 +11,22 @@ The pipeline runner already takes any processor; only `transcribe` exists.
 - **retention**: the only thing allowed to delete from `input/`, by age or by rule, as its own user with write access to `input/` and nothing else. Today nothing deletes.
 - **upload from the app**: a "send to box" button that puts a recording into `input/transcribe/` (nginx WebDAV `PUT` into a dedicated `input/uploads/`, tailnet only), so long recordings go through the pipeline instead of live windows.
 
-## 2. Two boxes, one room: the sound map
+## 2. The calendar, further
+
+Build 1 keeps the calendar on the box and the same on every device, and leaves the reminding
+with the app closed to the phone's own calendar app. Next:
+
+- **Reminders with the app closed**: Web Push from the box. The box already knows every alarm; a
+  small service (its own user, no network beyond the push service) sends them to the browsers that
+  subscribed, so the installed app rings like a native one.
+- **Sharing**: a family calendar several accounts can read and write (Radicale rights by group), and
+  read-only links.
+- **Contacts**: CardDAV from the same server, for birthdays and for the voice app to know names.
+- **Faster editing**: drag to move and resize in the week view; week numbers; a quick-add line.
+- **The voice app and the calendar together**: "remind me Tuesday at nine to call the bank" said in a
+  recording becomes an event, after the person confirms it.
+
+## 3. Two boxes, one room: the sound map
 
 Every microphone hears every voice, slightly later the further away it is, and coloured by the room's reverb. With two or more boxes (or phones) in the same room and their clocks aligned, the differences say where each speaker is.
 
@@ -21,18 +36,18 @@ Every microphone hears every voice, slightly later the further away it is, and c
 - **Better capture**: delay-and-sum beamforming toward the active speaker from all devices gives cleaner audio for Whisper than any single microphone.
 - **First step**: a pure-Python proof of concept in `box/` that takes two recordings of the same meeting and reports the delay per segment. Measure before optimizing.
 
-## 3. Rust where it pays
+## 4. Rust where it pays
 
 Python first, everywhere, until profiling shows where time goes. Likely candidates once the sound map exists: cross-correlation and beamforming over long multi-channel audio, the audio windowing in the pipeline runner, and the speaker clustering. The path is a Rust crate exposed to Python with PyO3, built by Nix like everything else, swapped in one function at a time behind the same tests.
 
-## 4. Devices that find each other
+## 5. Devices that find each other
 
 - **Same network**: boxes and phones discover each other over mDNS (already published as `myai.local`).
 - **Anywhere**: Tailscale. A box shows a QR code that carries an invite (a pre-approved, tagged auth key or a share link); scanning it on another box or phone joins it with exactly the access its tag allows.
 - **Bluetooth**: pairing two phones or a phone and a box nearby to exchange that same invite without typing anything.
 - **Sync**: devices sync `input/` folders (two boxes in one room both see both recordings) with a plain file sync, Syncthing or rsync, never through an AI.
 
-## 5. Users, groups, access
+## 6. Users, groups, access
 
 Two layers that already exist, made easy to manage:
 
@@ -41,11 +56,11 @@ Two layers that already exist, made easy to manage:
 
 The point is compartments: each AI processor gets exactly the inputs it is given and writes exactly one folder; anything that must never involve an AI (backups, retention, access control) stays plain code.
 
-## 6. Folders that survive a broken disk
+## 7. Folders that survive a broken disk
 
 `app/`, `input/` and `output/` on separately replaceable storage (three datasets or disks), each with its own redundancy and backup schedule. `app/` is reproducible from the flake and needs no backup beyond the models cache; `input/` is the irreplaceable one; `output/` can be regenerated from `input/` by re-running pipelines, at a cost. Remote backup targets (rsync over SSH to another box, which also gives off-site redundancy between friends' boxes) come after local snapshots.
 
-## 7. Distribution
+## 8. Distribution
 
 The goal: buy it, write it to a stick or start it in a VM, talk to your AI. Open questions before a store listing (Steam or otherwise):
 

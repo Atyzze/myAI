@@ -6,6 +6,11 @@
 #                                                  │     /capabilities what this box can take
 #                                                  │     /transcribe   ─https▶ VTS 127.0.0.1:4444
 #                                                  │     /ollama/      ─http─▶ Ollama 127.0.0.1:11434
+#                                                  │     /calendar/    the calendar app
+#                                                  │     /dav/         ─http─▶ Radicale 127.0.0.1:5232
+#
+# The calendar (calendar.nix) is the one part that keeps data for people across devices: their
+# calendars live on the box, in input/calendar/, and phones' own calendar apps use /dav/ too.
 #
 # At boot myai-probe measures the hardware and writes /run/myai/*: the Whisper
 # model/device for VTS, the Ollama backend, the models to fetch, and the limits
@@ -165,7 +170,10 @@ let
   };
 in
 {
-  imports = [ ./folders.nix ];
+  imports = [
+    ./folders.nix
+    ./calendar.nix
+  ];
 
   options.services.myai = {
     enable = mkEnableOption "the myAI stack (voice-note app, VTS transcription, Ollama)";
@@ -272,8 +280,9 @@ in
         FAT boot partition, which any computer can open after flashing):
         tailscale-authkey.txt, wifi.txt (ssid= and password= lines),
         authorized_keys (root), drop_authorized_keys (the SFTP drop box),
-        overrides.json. Secrets (the auth key and
-        the Wi-Fi password) are removed from the boot partition once copied.
+        calendar-users.txt (calendar accounts, "name password" lines),
+        overrides.json. Secrets (the auth key, the Wi-Fi password and the
+        calendar passwords) are removed from the boot partition once used.
       '';
     };
   };

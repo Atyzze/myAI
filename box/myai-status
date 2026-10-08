@@ -75,6 +75,9 @@ print_status() {
     service_line vts.service "transcription"
     service_line ollama.service "AI model"
     service_line nginx.service "web app"
+    if systemctl cat radicale.service >/dev/null 2>&1; then
+        service_line radicale.service "calendar"
+    fi
     service_line tailscaled.service "tailscale"
     echo
     echo "Reach it"
@@ -84,6 +87,9 @@ print_status() {
     dns=$(jq -r '.Self.DNSName // empty' <<<"$js" 2>/dev/null | sed 's/\.$//')
     if [ "$state" = "Running" ] && [ -n "$dns" ]; then
         echo "  anywhere: https://$dns   (devices on your tailnet, phones included)"
+        if systemctl cat radicale.service >/dev/null 2>&1; then
+            echo "  calendar: https://$dns/calendar/   (phones' calendar apps: https://$dns/dav/)"
+        fi
     else
         echo "  anywhere: Tailscale not logged in (${state:-not running})."
         echo "            Press [L] on the box's screen, or put tailscale-authkey.txt in"

@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="myai-calendar-build" content="1">
+
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self';
+  worker-src 'self';
+  connect-src 'self';
+  style-src 'self' 'unsafe-inline';
+  img-src 'self' data:;
+  font-src 'self' data:;
+  object-src 'none';
+  base-uri 'self';
+  form-action 'none'">
+
+<title>MyAI Calendar</title>
+<link rel="icon" type="image/png" href="assets/icon-192.png" />
+<link rel="manifest" href="manifest.webmanifest" />
+<meta name="theme-color" content="#000000" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<link rel="apple-touch-icon" href="assets/icon-192.png" />
+
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#000;--card:#0c0c10;--card2:#17171d;--line:#2b2b33;--line2:#3a3a45;--panel:#111;--panel-line:#444;
+  --text:#fff;--muted:#888;--dim:#666;--green:#4caf50;--green2:#5cc46a;--red:#d9534f;--cyan:#00bcd4;
+  --amber:#e0b34d;--orange:#ffa726;--blue:#8ec7ff;--hour:48px
+}
+html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,sans-serif;text-align:center;padding:2em 1em calc(120px + env(safe-area-inset-bottom,0px))}
+@media (max-width:420px){body{padding:3.2em .5em calc(120px + env(safe-area-inset-bottom,0px))}}
+button{cursor:pointer;border:0;background:#000;color:#fff;font:inherit;transition:background .2s,border-color .2s,color .2s}
+button:hover:not(:disabled){background:#222}
+button:disabled{opacity:.5;cursor:not-allowed}
+input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+[hidden]{display:none!important}
+.mono{font-family:monospace}
+
+/* ---- corners: settings, help, version, as in the voice app ---- */
+.corner-btn{position:absolute;top:10px;z-index:200;background:#111;border:1px solid var(--panel-line);border-radius:50%;width:28px;height:28px;font-size:14px;display:flex;align-items:center;justify-content:center;padding:0}
+.corner-btn:hover{background:#222;border-color:#888}
+#settingsBtn{left:10px}
+#helpBtn{right:10px}
+#app-version{position:absolute;top:40px;right:10px;z-index:200;min-width:28px;background:transparent;text-align:center;font:9px/1.4 monospace;color:#777;letter-spacing:.05em;white-space:nowrap;padding:0}
+#app-version.offered{color:var(--green2);font-weight:bold;cursor:pointer}
+
+/* ---- header ---- */
+#cal-header{max-width:1100px;margin:0 auto 10px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.title-row{display:flex;align-items:center;justify-content:center;gap:12px;width:100%}
+#period-title{font-size:1.35em;font-weight:bold;letter-spacing:.3px;min-width:0;overflow-wrap:anywhere}
+.nav-btn{width:40px;height:40px;border-radius:50%;border:1px solid #333;background:#0a0a0d;color:#ccc;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0}
+.nav-btn:hover:not(:disabled){border-color:var(--green);color:var(--green)}
+.controls-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px}
+.today-btn{border:1px solid #444;border-radius:8px;padding:6px 12px;font:bold 13px/1 monospace;color:#ccc;background:#0a0a0d}
+.today-btn:hover:not(:disabled){border-color:var(--green);color:var(--green)}
+.view-switch{display:inline-flex;border:1px solid #333;border-radius:9px;overflow:hidden}
+.view-switch button{padding:7px 12px;font:13px/1 monospace;color:#999;background:#0a0a0d;border-right:1px solid #333}
+.view-switch button:last-child{border-right:0}
+.view-switch button[aria-pressed="true"]{background:#0d2b14;color:var(--green);font-weight:bold}
+#newEventBtn{padding:.8em 1.6em;border:none;border-radius:34px;font-size:1.1em;font-weight:bold;background:var(--green);color:#04120a}
+#newEventBtn:hover:not(:disabled){background:#5bc763}
+#sync-line{font:12px/1.4 monospace;color:var(--muted);display:flex;align-items:center;gap:6px;justify-content:center;flex-wrap:wrap}
+#sync-line .dot{width:8px;height:8px;border-radius:50%;background:#555;flex-shrink:0}
+#sync-line.ok .dot{background:var(--green)}
+#sync-line.syncing .dot{background:var(--cyan);animation:pulse 1.2s ease-in-out infinite}
+#sync-line.pending .dot,#sync-line.offline .dot{background:var(--amber)}
+#sync-line.offline{color:#d7b24d}
+#sync-line.auth .dot,#sync-line.error .dot{background:var(--red)}
+#sync-line.auth,#sync-line.error{color:#ffb4b4}
+#sync-now{border:1px solid #333;border-radius:6px;padding:2px 8px;font:11px/1.4 monospace;color:#999;background:transparent}
+@keyframes pulse{0%,100%{opacity:.35}50%{opacity:1}}
+#notice{max-width:820px;margin:0 auto 10px;padding:9px 12px;border:1px solid #6b5a2a;background:#1b1608;border-radius:8px;font:13px/1.5 monospace;color:#ffd27a;text-align:left}
+#notice.error{border-color:#7a3434;background:#1b0c0c;color:#ffb4b4}
+
+/* ---- month ---- */
+#view{max-width:1100px;margin:0 auto;text-align:left}
+.month{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--line);gap:1px}
+.month .wd{background:#0a0a0d;font:11px/1 monospace;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:8px 6px;text-align:center}
+.month .day{background:var(--card);min-height:100px;padding:4px 4px 6px;display:flex;flex-direction:column;gap:2px;cursor:pointer;min-width:0;position:relative;border:0;text-align:left;color:inherit;border-radius:0}
+.month .day:hover{background:#121218}
+.month .day.other{background:#08080b}
+.month .day.other .num{color:#555}
+.month .day.selected{box-shadow:inset 0 0 0 2px var(--green)}
+.month .num{font:12px/1 monospace;color:#bbb;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:50%;flex-shrink:0;background:transparent;padding:0}
+.month .num:hover:not(:disabled){background:#2a2a33;color:#fff}
+.month .day.today .num{background:var(--green);color:#04120a;font-weight:bold}
+.chip{display:block;font:12px/1.35 system-ui,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-radius:5px;padding:1px 5px;border-left:3px solid var(--c,#4caf50);background:color-mix(in srgb,var(--c,#4caf50) 12%,transparent);color:#ddd;width:100%;text-align:left}
+.chip.allday{background:color-mix(in srgb,var(--c,#4caf50) 32%,#0c0c10);color:#fff;border-left-color:transparent}
+.chip .t{font:11px/1 monospace;color:#9aa;margin-right:4px}
+.chip:hover:not(:disabled){background:color-mix(in srgb,var(--c,#4caf50) 26%,transparent)}
+.chip.allday:hover:not(:disabled){background:color-mix(in srgb,var(--c,#4caf50) 45%,#0c0c10)}
+.chip.cancelled{text-decoration:line-through;opacity:.55}
+.chip.pending{border-left-style:dashed}
+.more{font:11px/1.3 monospace;color:var(--muted);padding-left:5px}
+.dots{display:none;gap:3px;flex-wrap:wrap;padding-left:3px}
+.dots i{width:6px;height:6px;border-radius:50%;background:var(--c,#4caf50);display:block}
+@media (max-width:640px){
+  .month .day{min-height:56px;align-items:center;padding:4px 2px}
+  .month .chip,.month .more{display:none}
+  .dots{display:flex;justify-content:center}
+}
+
+/* ---- agenda (list view, and the selected day under the month on phones) ---- */
+.agenda{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.agenda-day h3{font:bold 13px/1.4 monospace;color:#bbb;letter-spacing:.04em;margin:0 0 6px;display:flex;gap:8px;align-items:center}
+.agenda-day h3 .badge{font:bold 10px/1 monospace;color:#04120a;background:var(--green);border-radius:99px;padding:3px 7px}
+.agenda-day.past h3{color:#666}
+.agenda-empty{font:13px/1.5 monospace;color:#666;padding:8px 2px}
+.item{display:flex;gap:10px;align-items:flex-start;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:inherit;margin-bottom:6px}
+.item:nth-child(even){background:var(--card2);border-color:var(--line2)}
+.item:hover{border-color:#555}
+.item .when{font:12px/1.5 monospace;color:#9aa;min-width:13.5ch;flex-shrink:0}
+[data-clock="12"] .item .when{min-width:19.5ch}
+.item .bar{width:4px;align-self:stretch;border-radius:4px;background:var(--c,#4caf50);flex-shrink:0}
+.item .what{min-width:0;flex:1}
+.item .what b{display:block;font-weight:bold;overflow-wrap:anywhere}
+.item .what span{display:block;font-size:13px;color:#999;overflow-wrap:anywhere}
+.item.cancelled .what b{text-decoration:line-through;opacity:.6}
+.list-tools{display:flex;gap:8px;margin-bottom:6px}
+#search{flex:1;min-width:0;background:#0a0a0a;border:1px solid #444;border-radius:8px;padding:8px 10px;font:13px/1.2 monospace}
+.more-btn{display:block;margin:6px auto 0;border:1px dashed #555;border-radius:8px;padding:8px 14px;font:13px/1 monospace;color:#bbb;background:transparent}
+
+/* ---- week and day ---- */
+.timeline{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--card)}
+.tl-head{display:grid;grid-template-columns:52px repeat(var(--cols),minmax(0,1fr));background:#0a0a0d;border-bottom:1px solid var(--line)}
+.tl-head .h{padding:6px 4px;text-align:center;font:11px/1.3 monospace;color:var(--muted);border-left:1px solid var(--line);cursor:pointer}
+.tl-head .h b{display:block;font-size:15px;color:#ddd}
+.tl-head .h.today b{color:var(--green)}
+.tl-allday{display:grid;grid-template-columns:52px repeat(var(--cols),minmax(0,1fr));border-bottom:1px solid var(--line);min-height:28px}
+.tl-allday .lbl{font:10px/28px monospace;color:#666;text-align:center}
+.tl-allday .cell{border-left:1px solid var(--line);padding:2px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.tl-scroll{height:min(68vh,960px);overflow-y:auto;position:relative;-webkit-overflow-scrolling:touch;scrollbar-width:thin;scrollbar-color:#33414a transparent}
+.tl-grid{display:grid;grid-template-columns:52px repeat(var(--cols),minmax(0,1fr));position:relative;height:calc(24 * var(--hour))}
+.tl-hours{position:relative}
+.tl-hours span{position:absolute;right:6px;font:10px/1 monospace;color:#666;transform:translateY(-50%)}
+.tl-col{position:relative;border-left:1px solid var(--line);background:repeating-linear-gradient(to bottom,transparent 0,transparent calc(var(--hour) - 1px),#1c1c22 calc(var(--hour) - 1px),#1c1c22 var(--hour));cursor:crosshair}
+.tl-col.today{background-color:#0b130d}
+.tl-ev{position:absolute;border-radius:6px;padding:2px 5px;font:12px/1.3 system-ui,sans-serif;overflow:hidden;background:color-mix(in srgb,var(--c,#4caf50) 28%,#0c0c10);border-left:3px solid var(--c,#4caf50);color:#fff;text-align:left;cursor:pointer;min-height:16px}
+.tl-ev .t{display:block;font:10.5px/1.2 monospace;color:#cfd}
+.tl-ev.short{display:flex;gap:5px;align-items:baseline;white-space:nowrap;padding-top:1px;padding-bottom:0}
+.tl-ev.short .t{display:inline;flex-shrink:0}
+.tl-ev .loc{display:block;font-size:11px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-ev:hover:not(:disabled){background:color-mix(in srgb,var(--c,#4caf50) 40%,#0c0c10)}
+.tl-ev.cancelled{text-decoration:line-through;opacity:.55}
+.tl-ev.pending{border-left-style:dashed}
+.tl-now{position:absolute;left:0;right:0;height:2px;background:var(--red);z-index:3;pointer-events:none}
+.tl-now::before{content:"";position:absolute;left:-4px;top:-3px;width:8px;height:8px;border-radius:50%;background:var(--red)}
+
+/* ---- panels (settings, help, editor, details, sign in) ---- */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:300;align-items:flex-start;justify-content:center;padding:40px 10px 10px;overflow-y:auto}
+.overlay.open{display:flex}
+.panel{background:var(--panel);border:1px solid var(--panel-line);border-radius:16px;padding:18px;width:min(460px,100%);text-align:left;display:flex;flex-direction:column;gap:12px;margin-bottom:40px}
+.panel.wide{width:min(560px,100%)}
+.panel:focus{outline:none}
+.panel h2{font:bold 15px/1.3 monospace;color:#ccc;letter-spacing:.04em;margin:0;overflow-wrap:anywhere}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.close-btn{background:transparent;border:1px solid #555;color:#aaa;border-radius:6px;padding:5px 12px;font-size:13px;flex-shrink:0}
+.close-btn:hover:not(:disabled){background:#222;color:#fff;border-color:#888}
+.field{display:flex;flex-direction:column;gap:5px}
+.field>label,.label{font:12px/1.3 monospace;color:#888}
+.input,.select,.textarea{background:#0a0a0a;border:1px solid #444;border-radius:7px;padding:9px 10px;font-size:15px;width:100%}
+.input:focus,.select:focus,.textarea:focus{border-color:var(--green);outline:none}
+.textarea{min-height:90px;resize:vertical;font:14px/1.45 system-ui,sans-serif}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{min-width:0}
+.row .input[type=date]{flex:1.4}
+.row .input[type=time]{flex:1}
+.check{display:flex;align-items:center;gap:8px;font:14px/1.3 system-ui,sans-serif;color:#ddd;cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--green)}
+.hint{font:11.5px/1.5 monospace;color:#777;overflow-wrap:anywhere}
+.warn-box{border:1px dashed #6b5a2a;background:#14100a;color:#e6c200;border-radius:8px;padding:9px 11px;font:12px/1.55 monospace}
+.err-box{border:1px solid #7a3434;background:#1b0c0c;color:#ffb4b4;border-radius:8px;padding:9px 11px;font:12.5px/1.5 monospace}
+.divider{border:none;border-top:1px solid #333;margin:2px 0}
+.section-label{font:11px/1.3 monospace;color:#666;letter-spacing:.08em;text-transform:uppercase}
+.btn{border:1px solid #555;border-radius:8px;padding:10px 14px;font:bold 14px/1 monospace;color:#ddd;background:#0a0a0d}
+.btn.primary{background:var(--green);border-color:var(--green);color:#04120a}
+.btn.primary:hover:not(:disabled){background:#5bc763}
+.btn.danger{border-style:dashed;border-color:var(--red);color:var(--red);background:#1a0808}
+.btn.danger:hover:not(:disabled){background:#2a1010;color:#ff6b68}
+.btn.quiet{border-style:dashed;color:#bbb;background:transparent}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap}
+.btn-row .btn{flex:1}
+.weekday-chips{display:flex;gap:4px;flex-wrap:wrap}
+.weekday-chips button{border:1px solid #444;border-radius:99px;padding:5px 9px;font:12px/1 monospace;color:#999;background:#0a0a0d}
+.weekday-chips button[aria-pressed="true"]{background:#0d2b14;border-color:var(--green);color:var(--green)}
+.alarm-chips{display:flex;gap:6px;flex-wrap:wrap}
+.alarm-chip{display:inline-flex;align-items:center;gap:6px;border:1px solid #2a6b3a;background:#0a1a0f;color:#8fd19a;border-radius:99px;padding:4px 10px;font:12px/1.2 monospace}
+.alarm-chip.custom{border-color:#555;background:#111;color:#bbb}
+.alarm-chip button{background:transparent;color:inherit;font:bold 12px/1 monospace;padding:0 2px}
+.cal-dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--c,#4caf50);flex-shrink:0}
+.details-when{font:14px/1.5 system-ui,sans-serif;color:#ddd}
+.details-meta{display:flex;flex-direction:column;gap:6px;font-size:14px;color:#ccc}
+.details-meta .k{font:11px/1.3 monospace;color:#777;display:block}
+.notes{white-space:pre-wrap;overflow-wrap:anywhere;background:#0a0a0a;border:1px dashed #333;border-radius:8px;padding:9px 10px;font-size:14px;color:#ddd}
+.notes a,.details-meta a{color:var(--blue)}
+.map-links{display:flex;gap:8px;flex-wrap:wrap}
+.map-links a{font:12px/1 monospace;color:var(--blue);border:1px solid #2a4a6b;border-radius:99px;padding:5px 10px;text-decoration:none}
+.cal-row{display:flex;align-items:center;gap:8px}
+.cal-row input[type=color]{width:30px;height:30px;border:1px solid #444;border-radius:6px;background:#0a0a0a;padding:2px;flex-shrink:0}
+.cal-row .input{flex:1;padding:6px 8px;font-size:14px}
+.guide{border:1px solid #333;border-radius:10px;padding:0}
+.guide summary{cursor:pointer;padding:10px 12px;font:bold 13px/1.3 monospace;color:#ccc}
+.guide ol{padding:0 14px 12px 32px;font-size:13.5px;color:#ccc;display:flex;flex-direction:column;gap:5px}
+.copyable{display:flex;gap:6px;align-items:center}
+.copyable code{flex:1;min-width:0;overflow-wrap:anywhere;background:#0a0a0a;border:1px solid #333;border-radius:6px;padding:6px 8px;font:12px/1.4 monospace;color:#9fd}
+.copyable button{border:1px solid #444;border-radius:6px;padding:6px 8px;font-size:12px;background:#0a0a0d;flex-shrink:0}
+.problem{font:12px/1.5 monospace;color:#d7b24d;border-left:3px solid #6b5a2a;padding-left:8px}
+#helpPanel p{font-size:13px;color:#bbb;line-height:1.6}
+#helpPanel h3{font:bold 13px/1.3 monospace;color:var(--blue);margin-top:6px}
+#helpPanel .help-warn{border:1px dashed #6b5a2a;background:#14100a;border-radius:8px;padding:10px 12px;color:#e6c200}
+
+/* ---- sign in ---- */
+#signin{max-width:420px;margin:30px auto 0;text-align:left}
+#signin .panel{width:100%}
+.brand{font-size:2.2em;text-align:center}
+
+/* ---- toasts and reminders ---- */
+#toasts{position:fixed;left:0;right:0;bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:600;display:flex;flex-direction:column;align-items:center;gap:8px;pointer-events:none;padding:0 10px}
+.toast{pointer-events:all;max-width:min(520px,100%);background:#111;border:1px solid #444;border-radius:12px;padding:10px 14px;font:13px/1.45 monospace;color:#ddd;box-shadow:0 6px 24px rgba(0,0,0,.6);display:flex;gap:10px;align-items:center;text-align:left}
+.toast.reminder{border-color:var(--orange);background:#1a1200;color:#ffd9a0}
+.toast button{border:1px solid currentColor;border-radius:6px;padding:4px 9px;font:12px/1 monospace;color:inherit;background:transparent;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<button id="settingsBtn" class="corner-btn" title="Settings" aria-label="Settings">⚙️</button>
+<button id="helpBtn" class="corner-btn" title="How this calendar works" aria-label="Help">❓</button>
+<button id="app-version" title="The build this page is running" aria-label="App version">v1</button>
+
+<main id="app" hidden>
+  <header id="cal-header">
+    <div class="title-row">
+      <button class="nav-btn" id="prevBtn" aria-label="Previous">◀</button>
+      <h1 id="period-title" aria-live="polite"></h1>
+      <button class="nav-btn" id="nextBtn" aria-label="Next">▶</button>
+    </div>
+    <div class="controls-row">
+      <button class="today-btn" id="todayBtn">Today</button>
+      <div class="view-switch" role="group" aria-label="View">
+        <button data-view="month" aria-pressed="true">Month</button>
+        <button data-view="week" aria-pressed="false">Week</button>
+        <button data-view="day" aria-pressed="false">Day</button>
+        <button data-view="list" aria-pressed="false">List</button>
+      </div>
+    </div>
+    <button id="newEventBtn">＋ New event</button>
+    <div id="sync-line" role="status" aria-live="polite"><span class="dot"></span><span id="sync-text">Starting…</span><button id="sync-now" title="Sync now">⟳ sync</button></div>
+  </header>
+  <div id="notice" role="alert" hidden></div>
+  <section id="view" aria-live="polite"></section>
+</main>
+
+<section id="signin" hidden>
+  <div class="brand">📅</div>
+  <div class="panel">
+    <h2>Sign in to your calendar</h2>
+    <p class="hint">Your calendar lives on your myAI box. This device keeps a copy, so the calendar opens and works without a connection, and sends what you change when it is back.</p>
+    <p id="si-again" class="warn-box" hidden>The box no longer accepts the password saved on this device. Sign in again; this device's copy and the changes it has not sent yet are kept.</p>
+    <div class="field"><label for="si-user">Name</label><input class="input" id="si-user" autocomplete="username" autocapitalize="none" spellcheck="false"></div>
+    <div class="field"><label for="si-pass">Password</label><input class="input" id="si-pass" type="password" autocomplete="current-password"></div>
+    <details class="hint"><summary>Server</summary>
+      <div class="field" style="margin-top:6px"><label for="si-server">Calendar server address on this site</label><input class="input" id="si-server" value="/dav/" autocapitalize="none" spellcheck="false"></div>
+    </details>
+    <div id="si-error" class="err-box" hidden></div>
+    <button class="btn primary" id="si-go">Sign in</button>
+    <p class="hint">No account yet? On the box: <code>myai-calendar add yourname</code>, or put a calendar-users.txt on its boot stick (see ❓).</p>
+  </div>
+</section>
+
+<div class="overlay" id="detailsOverlay" aria-hidden="true"><div class="panel" id="detailsPanel" role="dialog" aria-modal="true" aria-labelledby="dt-title" tabindex="-1"></div></div>
+<div class="overlay" id="editorOverlay" aria-hidden="true"><div class="panel wide" id="editorPanel" role="dialog" aria-modal="true" aria-labelledby="ed-title" tabindex="-1"></div></div>
+<div class="overlay" id="settingsOverlay" aria-hidden="true"><div class="panel wide" id="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="st-title" tabindex="-1"></div></div>
+<div class="overlay" id="scopeOverlay" aria-hidden="true"><div class="panel" id="scopePanel" role="dialog" aria-modal="true" aria-labelledby="sc-title" tabindex="-1"></div></div>
+<div class="overlay" id="helpOverlay" aria-hidden="true">
+  <div class="panel wide" id="helpPanel" role="dialog" aria-modal="true" aria-labelledby="helpTitle" tabindex="-1">
+    <div class="panel-head"><h2 id="helpTitle">❓ How this calendar works</h2><button class="close-btn" data-close="helpOverlay">✕ Close</button></div>
+    <p>There is one calendar, and it is on your myAI box. Every device you sign in on (phone, laptop, desktop) shows that same calendar and keeps a copy of it, so it opens instantly and works without a connection. What you change offline is kept on the device and sent to the box as soon as it can be; the dot under ＋ New event says how that stands.</p>
+    <h3>🔔 Reminders you can rely on</h3>
+    <p class="help-warn">For reminders on your phone, also add this calendar to the phone's own calendar app (Settings → Connect your phone). Its alarms are kept on the phone and go off on time even without a connection or with the box switched off. This app shows reminders while it is open; reminders from this app while it is closed come with a later build.</p>
+    <h3>🔁 Changes on two devices</h3>
+    <p>If the same event is changed on two devices before they could sync, the change made later wins on both, and the other is listed under Settings → Recent sync problems, so nothing changes without a trace. An event changed on one device and deleted on another is kept, with the change.</p>
+    <h3>💾 Backups</h3>
+    <p>Every event is a plain .ics file in the box's input/calendar/ folder, which the box's own backups copy with everything else. Settings → ⬇ .ics downloads a calendar as one file any calendar app can open, and Settings → Import brings in an export from Google, Apple or Outlook. If many events disappear from the box at once (a disk replaced without its backup, say), each device keeps a copy and offers to put them back.</p>
+    <h3>🔒 Privacy</h3>
+    <p>The app talks only to your box, on the same address it was opened from. Each person signs in with their own account and sees only their own calendars. Signing out removes this device's copy and its saved password.</p>
+    <h3>⬇️ Updates</h3>
+    <p>The version under ❓ is the build this page is running. A newer build is downloaded in the background and offered there (this build › the new build); it takes over when you tap it, or the next time the app is started.</p>
+  </div>
+</div>
+
+<div id="toasts" aria-live="polite"></div>
+
+<script type="module" src="src/js/app.js"></script>
+</body>
+</html>
