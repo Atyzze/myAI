@@ -12,8 +12,8 @@ import { beginJob, endJob, abortError } from './jobs.js';
 import { replyStreamInit, replyStreamModel, replyStreamAppend, replyStreamDone,
          replyStreamStats } from './live-tabs.js';
 
-const NUM_PREDICT    = 4096;
-const OUTPUT_RESERVE = 4096;
+const NUM_PREDICT    = 10240;
+const OUTPUT_RESERVE = 10240;
 
 const TRANSLATE_LOAD_BUDGET_MS = 60000;
 const TRANSLATE_LOAD_GRACE_MS = 20000;
