@@ -269,7 +269,14 @@ export function createReplyStreamReader() {
             text += obj.response;
             events.push({ type: 'token', token: obj.response });
         }
-        if (obj.done) events.push({ type: 'done' });
+        if (obj.done) {
+            events.push({
+                type: 'done',
+                doneReason:   String(obj.done_reason || ''),
+                promptTokens: Math.max(0, Number(obj.prompt_eval_count) || 0),
+                outputTokens: Math.max(0, Number(obj.eval_count) || 0)
+            });
+        }
     }
 
     return {
@@ -291,4 +298,32 @@ export function createReplyStreamReader() {
         },
         get text() { return text; }
     };
+}
+
+// Ollama's real token counts (prompt_eval_count, eval_count) only arrive with the final stream
+// object. A reply that filled the model's context window, or used up its output budget, ends
+// mid-sentence without an error, so this turns those counts into a notice the person can see.
+// The output count includes the model's hidden thinking.
+const CONTEXT_FULL_MARGIN_TOKENS = 16;
+
+export function describeReplyCutoff({ doneReason = '', promptTokens = 0, outputTokens = 0,
+                                      numCtx = 0, numPredict = 0 } = {}) {
+    const prompt = Math.max(0, Number(promptTokens) || 0);
+    const output = Math.max(0, Number(outputTokens) || 0);
+    const ctx = Math.max(0, Number(numCtx) || 0);
+    const limit = Math.max(0, Number(numPredict) || 0);
+    const fmt = n => n.toLocaleString('en-US');
+
+    const contextFull = ctx > 0 && prompt > 0 && prompt + output >= ctx - CONTEXT_FULL_MARGIN_TOKENS;
+    if (contextFull) {
+        return `⚠️ Reply cut off: the model's context window is full `
+            + `(prompt ${fmt(prompt)} + reply ${fmt(output)} of ${fmt(ctx)} tokens). `
+            + `Remove or shorten context items to leave more room for the reply.`;
+    }
+    const outputFull = (limit > 0 && output >= limit) || doneReason === 'length';
+    if (outputFull) {
+        return `⚠️ Reply cut off: it reached the reply limit`
+            + `${limit > 0 ? ` of ${fmt(limit)} tokens` : ''}, which includes the model's thinking.`;
+    }
+    return '';
 }

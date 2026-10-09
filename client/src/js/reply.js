@@ -2,7 +2,8 @@ import { CONFIG, SETTINGS_DEFAULTS, getSetting, uid, confirmServerProcessing,
          writeStored } from './config.js';
 import { dbExec, dbUpdate } from './db.js';
 import { estimateNumCtx, buildBudgetedPrompt, createReplyStreamReader,
-         chooseReplyModel, isFallbackChoice, describeLoadedModel } from './reply-core.js';
+         chooseReplyModel, isFallbackChoice, describeLoadedModel,
+         describeReplyCutoff } from './reply-core.js';
 import { loadedModelNames, isModelResident, nextModelStep, describeModelLoad,
          describeModelFailure, shouldRetryGenerate, describeFirstByteTimeout,
          sameModel, MODEL_KEEP_ALIVE, MODEL_GENERATE_ATTEMPTS,
@@ -402,13 +403,14 @@ export async function runSummary(recId, progressCallback, dropTId) {
         reader = res.body.getReader();
         const decoder = new TextDecoder();
         const parser = createReplyStreamReader();
+        let finish = null;
 
         const applyEvents = events => {
             for (const event of events) {
                 if (event.type === 'error') throw new Error(`Reply server: ${event.message}`);
                 if (event.type === 'first-token') progressCallback('__first_token__');
                 else if (event.type === 'token') replyStreamAppend(recId, event.token, streamGen);
-                else if (event.type === 'done') progressCallback('Done');
+                else if (event.type === 'done') { finish = event; progressCallback('Done'); }
             }
         };
 
@@ -424,9 +426,14 @@ export async function runSummary(recId, progressCallback, dropTId) {
 
         const fullText = parser.text;
         if (!fullText.trim()) throw new Error('Reply server completed without returning text.');
-        replyStreamDone(recId, streamGen);
 
         const measured = replyStreamStats(recId);
+        const cutoff = finish ? describeReplyCutoff({
+            ...finish, numCtx, numPredict: NUM_PREDICT
+        }) : '';
+        if (cutoff) replyStreamAppend(recId, `\n\n${cutoff}`, streamGen);
+        replyStreamDone(recId, streamGen);
+        const storedText = cutoff ? `${fullText}\n\n${cutoff}` : fullText;
 
         const stored = await dbUpdate(CONFIG.STORE_REC, recId, (current) => {
             if (!current || (current.resultGeneration || 0) !== resultGeneration) return null;
@@ -434,7 +441,7 @@ export async function runSummary(recId, progressCallback, dropTId) {
             current.summaries = current.summaries || [];
             current.summaries.unshift({
                 id: uid(), transcriptId: targetT.id,
-                text: fullText, source: 'S', time: Date.now(),
+                text: storedText, source: 'S', time: Date.now(),
                 model,
                 tokenCount: measured ? measured.count : 0,
                 elapsedMs:  measured ? measured.elapsedMs : 0

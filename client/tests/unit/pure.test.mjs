@@ -3396,6 +3396,31 @@ await testStitch();
 
     {
         const r = createReplyStreamReader();
+        r.push(line({ response: 'x' }));
+        const [done] = r.push(line({ done: true, done_reason: 'length', prompt_eval_count: 31500, eval_count: 1268 }));
+        eq(done.type, 'done', 'reply stream: the final object is a done event');
+        eq(done.doneReason, 'length', 'reply stream: the done event keeps why the model stopped');
+        eq(done.promptTokens, 31500, 'reply stream: the done event keeps the real prompt token count');
+        eq(done.outputTokens, 1268, 'reply stream: the done event keeps the real output token count');
+    }
+
+    {
+        const { describeReplyCutoff } = await import('../../src/js/reply-core.js');
+        const full = describeReplyCutoff({ doneReason: 'length', promptTokens: 31500, outputTokens: 1268,
+                                           numCtx: 32768, numPredict: 10240 });
+        ok(/context window is full/.test(full) && /31,500/.test(full) && /32,768/.test(full),
+           'reply cutoff: a reply that filled the context window says so, with the real counts');
+        ok(/reply limit of 10,240 tokens/.test(describeReplyCutoff({ doneReason: 'length', promptTokens: 2000,
+               outputTokens: 10240, numCtx: 16384, numPredict: 10240 })),
+           'reply cutoff: a reply that used its whole output budget names that limit');
+        eq(describeReplyCutoff({ doneReason: 'stop', promptTokens: 2000, outputTokens: 900,
+                                 numCtx: 16384, numPredict: 10240 }), '',
+           'reply cutoff: a reply that finished on its own gets no notice');
+        eq(describeReplyCutoff({}), '', 'reply cutoff: a server that reports no counts gets no notice');
+    }
+
+    {
+        const r = createReplyStreamReader();
         eq(drain(r.push(line({ response: '' }))), '', 'reply stream: an empty response fragment emits nothing');
         eq(drain(r.push(line({ response: 'end', done: true }))), 'first-token,token,done',
            'reply stream: a final object may carry both a token and completion');
