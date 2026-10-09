@@ -13,6 +13,7 @@ export const NO_LIMITS = Object.freeze({
     translateInFlight: null,
     transcribeConcurrency: null,
     llm: null,
+    maxContext: null,
     whisper: '',
     warnings: [],
     notes: []
@@ -46,6 +47,7 @@ export function normalizeCapabilities(raw) {
         translateInFlight: wholeNumber(raw.translateInFlight, 0, 64),
         transcribeConcurrency: wholeNumber(raw.transcribeConcurrency, 1, 64),
         llm: raw.llm == null || raw.llm === '' ? null : String(raw.llm).slice(0, 120),
+        maxContext: wholeNumber(raw.maxContext, 2048, 1048576),
         whisper: String(raw.whisper ?? '').slice(0, 120),
         warnings: messages(raw.warnings),
         notes: messages(raw.notes)

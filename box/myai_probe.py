@@ -53,6 +53,30 @@ LLM_LADDER: list[tuple[str, float]] = [
 ]
 LLM_CONTEXT_OVERHEAD_GIB = 1.0
 
+# The context a reply may ask for. The app has always allowed 32k; a box only goes above that
+# when the whole model runs on a GPU (on a CPU, reading a very long prompt takes minutes) and
+# the card has memory left for the larger KV cache of every request Ollama runs in parallel.
+DEFAULT_MAX_CONTEXT = 32768
+CONTEXT_STEPS = (32768, 40960, 65536, 131072, 262144)
+# KV cache per token of context at f16, in KiB: layers x 2 (K and V) x KV heads x head size x 2 bytes.
+LLM_KV_KIB_PER_TOKEN: dict[str, int] = {
+    "qwen3:0.6b": 112,
+    "qwen3:1.7b": 112,
+    "qwen3:4b": 144,
+    "qwen3:8b": 144,
+    "qwen3:14b": 160,
+}
+UNKNOWN_KV_KIB_PER_TOKEN = 256
+# The longest context each model is built for, as Ollama's library lists it. qwen3:4b is the
+# 2507 release (256k); the other qwen3 sizes are 40k.
+LLM_NATIVE_CONTEXT: dict[str, int] = {
+    "qwen3:0.6b": 40960,
+    "qwen3:1.7b": 40960,
+    "qwen3:4b": 262144,
+    "qwen3:8b": 40960,
+    "qwen3:14b": 40960,
+}
+
 # name -> (huggingface repo, cpu int8 GiB, gpu GiB)
 WHISPER_MODELS: dict[str, tuple[str, float, float]] = {
     "tiny": ("Systran/faster-whisper-tiny", 0.3, 0.4),
@@ -224,6 +248,21 @@ def _llm_size(tag: str) -> float:
     return dict(LLM_LADDER).get(tag, 0.0)
 
 
+def _max_context(tag: str | None, free_gib: float, parallel: int) -> int:
+    """The largest step of CONTEXT_STEPS the model supports and free_gib holds for every
+    parallel request, never below DEFAULT_MAX_CONTEXT (what the app asks for anyway)."""
+    if not tag or free_gib <= 0:
+        return DEFAULT_MAX_CONTEXT
+    per_token = LLM_KV_KIB_PER_TOKEN.get(tag, UNKNOWN_KV_KIB_PER_TOKEN) * 1024
+    native = LLM_NATIVE_CONTEXT.get(tag, DEFAULT_MAX_CONTEXT)
+    fits = free_gib * GIB / (per_token * max(1, parallel))
+    best = DEFAULT_MAX_CONTEXT
+    for step in CONTEXT_STEPS:
+        if step <= native and step <= fits:
+            best = max(best, step)
+    return best
+
+
 def plan(hw: Hardware, overrides: dict | None = None) -> dict:
     o = dict(overrides or {})
     available = set(o.get("accelerators", ["cuda", "vulkan"]))
@@ -334,6 +373,11 @@ def plan(hw: Hardware, overrides: dict | None = None) -> dict:
         panels, in_flight = 2, 1
     transcribe_concurrency = 10 if w_device == "cuda" else max(1, min(4, hw.cores // 4))
 
+    context_free_gib = (vram_budget - llm[1] - LLM_CONTEXT_OVERHEAD_GIB) if fast_llm else 0.0
+    max_context = _max_context(llm[0] if llm else None, context_free_gib, in_flight)
+    if o.get("max_context"):
+        max_context = max(2048, int(o["max_context"]))
+
     tier = (
         "minimal" if hw.ram_gib < 4 or llm is None else
         "workstation" if fast_llm and llm and _llm_size(llm[0]) >= 9 else
@@ -366,6 +410,7 @@ def plan(hw: Hardware, overrides: dict | None = None) -> dict:
             "translateInFlight": in_flight,
             "transcribeConcurrency": transcribe_concurrency,
             "recommendedModel": llm[0] if llm else None,
+            "maxContext": max_context,
         },
         "warnings": warnings,
         "notes": notes,
@@ -440,7 +485,8 @@ def report(p: dict) -> str:
         lines.append("  AI model none (not enough memory)")
     c = p["client"]
     lines.append(f"  Client   up to {c['maxPanels']} translation boxes, "
-                 f"{c['transcribeConcurrency']} parallel transcriptions")
+                 f"{c['transcribeConcurrency']} parallel transcriptions, "
+                 f"replies up to {c['maxContext']:,} tokens of context")
     for msg in p["warnings"]:
         lines.append(f"  WARNING  {msg}")
     for msg in p["notes"]:

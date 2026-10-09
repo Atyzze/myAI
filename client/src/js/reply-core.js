@@ -101,9 +101,11 @@ export function estimateNumCtx(promptText, {
     charsPerToken  = LATIN_CHARS_PER_TOKEN,
     headroomTokens = 2048,
     minCtx         = 8192,
-    maxCtx         = 32768
+    maxCtx         = 32768,
+    tokenScale     = 1
 } = {}) {
-    const needed = estimateTokens(promptText, charsPerToken) + headroomTokens;
+    const scale = Math.max(1, Number(tokenScale) || 1);
+    const needed = Math.ceil(estimateTokens(promptText, charsPerToken) * scale) + headroomTokens;
     let numCtx = minCtx;
     while (numCtx < needed && numCtx < maxCtx) numCtx *= 2;
     return Math.min(numCtx, maxCtx);
@@ -302,8 +304,11 @@ export function createReplyStreamReader() {
 
 // Ollama's real token counts (prompt_eval_count, eval_count) only arrive with the final stream
 // object. A reply that filled the model's context window, or used up its output budget, ends
-// mid-sentence without an error, so this turns those counts into a notice the person can see.
-// The output count includes the model's hidden thinking.
+// mid-sentence without an error, so this turns how it stopped into a notice the person can see.
+// Only those two limits make Ollama stop with done_reason "length", so a "length" stop short of
+// the output limit was the context window. The output count includes the model's thinking.
+// The prompt count is not used to decide: when Ollama reuses a cached prompt prefix it reports
+// only the part it had to read again.
 const CONTEXT_FULL_MARGIN_TOKENS = 16;
 
 export function describeReplyCutoff({ doneReason = '', promptTokens = 0, outputTokens = 0,
@@ -314,16 +319,62 @@ export function describeReplyCutoff({ doneReason = '', promptTokens = 0, outputT
     const limit = Math.max(0, Number(numPredict) || 0);
     const fmt = n => n.toLocaleString('en-US');
 
-    const contextFull = ctx > 0 && prompt > 0 && prompt + output >= ctx - CONTEXT_FULL_MARGIN_TOKENS;
+    const outputFull = limit > 0 && output >= limit;
+    const contextFull = !outputFull && (
+        doneReason === 'length'
+        || (ctx > 0 && prompt > 0 && prompt + output >= ctx - CONTEXT_FULL_MARGIN_TOKENS));
     if (contextFull) {
-        return `⚠️ Reply cut off: the model's context window is full `
-            + `(prompt ${fmt(prompt)} + reply ${fmt(output)} of ${fmt(ctx)} tokens). `
+        return `⚠️ Reply cut off: the model's context window${ctx ? ` of ${fmt(ctx)} tokens` : ''} was full `
+            + `after ${fmt(output)} reply tokens (thinking included). `
             + `Remove or shorten context items to leave more room for the reply.`;
     }
-    const outputFull = (limit > 0 && output >= limit) || doneReason === 'length';
-    if (outputFull) {
+    if (outputFull || doneReason === 'length') {
         return `⚠️ Reply cut off: it reached the reply limit`
             + `${limit > 0 ? ` of ${fmt(limit)} tokens` : ''}, which includes the model's thinking.`;
     }
     return '';
+}
+
+// The largest context the model itself supports, from Ollama's /api/show answer
+// (model_info["<architecture>.context_length"]). null when the answer does not say.
+export function contextLengthFromShow(payload) {
+    const info = payload && typeof payload === 'object' ? payload.model_info : null;
+    if (!info || typeof info !== 'object') return null;
+    for (const [key, value] of Object.entries(info)) {
+        if (!/(^|\.)context_length$/.test(key)) continue;
+        const n = Math.floor(Number(value));
+        if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+}
+
+// The context a reply may ask for: never more than the model supports, and never more than the
+// box has memory for. The box sized its limit for the model it chose, so that limit only applies
+// to that model; any other model gets the app's own ceiling.
+export function replyContextCeiling({ model = '', modelMax = null, boxModel = null, boxMax = null,
+                                      fallback = 32768, sameModelFn = (a, b) => a === b } = {}) {
+    const boxApplies = boxMax != null && Number(boxMax) > 0 && boxModel && sameModelFn(boxModel, model);
+    const ceiling = boxApplies ? Math.floor(Number(boxMax)) : fallback;
+    const native = Number(modelMax) > 0 ? Math.floor(Number(modelMax)) : Infinity;
+    return Math.max(1, Math.min(ceiling, native));
+}
+
+// How far the app's token estimate runs under the model's real count, learned from replies.
+// It rises at once when a prompt turns out larger than estimated and eases back slowly, so one
+// small or cached prompt cannot undo it. Prompts too small to say much, and answers that look
+// like a cache hit, leave it as it is.
+export const DEFAULT_TOKEN_SCALE = 1.1;
+export const MIN_TOKEN_SCALE = 1.05;
+export const MAX_TOKEN_SCALE = 2;
+const MIN_CALIBRATION_TOKENS = 1000;
+
+export function nextTokenScale(previous, estimatedTokens, actualTokens) {
+    const prev = Math.min(MAX_TOKEN_SCALE, Math.max(MIN_TOKEN_SCALE, Number(previous) || DEFAULT_TOKEN_SCALE));
+    const estimated = Number(estimatedTokens) || 0;
+    const actual = Number(actualTokens) || 0;
+    if (estimated < MIN_CALIBRATION_TOKENS || actual <= 0) return prev;
+    const ratio = actual / estimated;
+    if (ratio < 0.5) return prev;
+    const next = ratio >= prev ? ratio * 1.02 : prev * 0.8 + ratio * 0.2;
+    return Math.min(MAX_TOKEN_SCALE, Math.max(MIN_TOKEN_SCALE, Math.round(next * 1000) / 1000));
 }

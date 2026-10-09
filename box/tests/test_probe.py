@@ -102,6 +102,21 @@ class PlannerTests(unittest.TestCase):
             self.assertGreaterEqual(rung, previous, f"{ram} GiB planned a smaller model")
             previous = rung
 
+    def test_reply_context_stays_at_32k_unless_memory_and_model_allow_more(self):
+        self.assertEqual(probe.plan(hw(16, 8))["client"]["maxContext"], 32768, "CPU boxes keep 32k")
+        self.assertEqual(probe.plan(hw(64, 16, [NV(24)]))["client"]["maxContext"], 32768,
+                         "a card filled by the model has no room for a bigger context")
+        # qwen3:4b supports 256k; 20 GiB free over 2 parallel requests holds 65k each, not 131k.
+        self.assertEqual(probe._max_context("qwen3:4b", 20, 2), 65536)
+        self.assertEqual(probe._max_context("qwen3:8b", 100, 1), 40960, "never above what the model supports")
+        self.assertEqual(probe._max_context("qwen3:8b", 1, 4), 32768, "never below what the app already asks")
+        self.assertEqual(probe._max_context(None, 100, 1), 32768)
+
+    def test_max_context_override_wins(self):
+        p = probe.plan(hw(16, 8), {"max_context": 131072})
+        self.assertEqual(p["client"]["maxContext"], 131072)
+        self.assertEqual(probe.capabilities(p)["maxContext"], 131072)
+
 
 class OutputTests(unittest.TestCase):
     def test_outputs_are_complete_and_consistent(self):

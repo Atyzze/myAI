@@ -1664,8 +1664,8 @@ export const mutations = [
     {
         id: 'MUT-REPLY-OWN-CONTEXT',
         file: 'src/js/reply.js',
-        from: 'minCtx: AI_NUM_CTX, maxCtx: AI_MAX_NUM_CTX',
-        to: 'minCtx: 8192, maxCtx: AI_MAX_NUM_CTX',
+        from: 'minCtx: AI_NUM_CTX, maxCtx: ceiling',
+        to: 'minCtx: AI_MAX_NUM_CTX, maxCtx: ceiling',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /moving between them never reloads the model/
     },

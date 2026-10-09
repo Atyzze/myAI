@@ -3408,8 +3408,11 @@ await testStitch();
         const { describeReplyCutoff } = await import('../../src/js/reply-core.js');
         const full = describeReplyCutoff({ doneReason: 'length', promptTokens: 31500, outputTokens: 1268,
                                            numCtx: 32768, numPredict: 10240 });
-        ok(/context window is full/.test(full) && /31,500/.test(full) && /32,768/.test(full),
+        ok(/context window of 32,768 tokens was full after 1,268 reply tokens/.test(full),
            'reply cutoff: a reply that filled the context window says so, with the real counts');
+        ok(/context window/.test(describeReplyCutoff({ doneReason: 'length', promptTokens: 40, outputTokens: 1268,
+                                                       numCtx: 32768, numPredict: 10240 })),
+           'reply cutoff: a length stop short of the reply limit is the context window, even when a cached prompt reports few tokens');
         ok(/reply limit of 10,240 tokens/.test(describeReplyCutoff({ doneReason: 'length', promptTokens: 2000,
                outputTokens: 10240, numCtx: 16384, numPredict: 10240 })),
            'reply cutoff: a reply that used its whole output budget names that limit');
@@ -3417,6 +3420,36 @@ await testStitch();
                                  numCtx: 16384, numPredict: 10240 }), '',
            'reply cutoff: a reply that finished on its own gets no notice');
         eq(describeReplyCutoff({}), '', 'reply cutoff: a server that reports no counts gets no notice');
+    }
+
+    {
+        const { contextLengthFromShow, replyContextCeiling, nextTokenScale, estimateNumCtx,
+                DEFAULT_TOKEN_SCALE, MIN_TOKEN_SCALE, MAX_TOKEN_SCALE } = await import('../../src/js/reply-core.js');
+        eq(contextLengthFromShow({ model_info: { 'general.architecture': 'qwen3', 'qwen3.context_length': 262144 } }),
+           262144, 'model context: read from the architecture-specific key /api/show returns');
+        eq(contextLengthFromShow({}), null, 'model context: an answer without it is unknown');
+        eq(contextLengthFromShow(null), null, 'model context: no answer is unknown');
+
+        eq(replyContextCeiling({ model: 'qwen3:4b', modelMax: 262144, boxModel: 'qwen3:4b', boxMax: 65536 }), 65536,
+           'context ceiling: the box limit applies to the model the box chose');
+        eq(replyContextCeiling({ model: 'qwen3:8b', modelMax: 40960, boxModel: 'qwen3:4b', boxMax: 131072 }), 32768,
+           'context ceiling: another model gets the app ceiling, not the box limit sized for a different model');
+        eq(replyContextCeiling({ model: 'qwen3:8b', modelMax: 40960, boxModel: 'qwen3:8b', boxMax: 131072 }), 40960,
+           'context ceiling: never above what the model supports');
+        eq(replyContextCeiling({ model: 'x', modelMax: null }), 32768,
+           'context ceiling: no box and no model answer keeps the app ceiling');
+
+        eq(nextTokenScale(DEFAULT_TOKEN_SCALE, 500, 900), DEFAULT_TOKEN_SCALE, 'token scale: small prompts teach nothing');
+        eq(nextTokenScale(1.1, 20000, 2000), 1.1, 'token scale: a cached prompt (tiny real count) teaches nothing');
+        ok(nextTokenScale(1.1, 20000, 26000) >= 1.3, 'token scale: an undercount raises it at once');
+        const eased = nextTokenScale(1.5, 20000, 21000);
+        ok(eased < 1.5 && eased > 1.3, `token scale: an accurate estimate eases it back slowly (${eased})`);
+        eq(nextTokenScale(1.1, 20000, 90000), MAX_TOKEN_SCALE, 'token scale: capped');
+        eq(nextTokenScale(1.1, 20000, 15000), Math.max(MIN_TOKEN_SCALE, 1.1 * 0.8 + 0.75 * 0.2),
+           'token scale: never below the minimum margin');
+
+        ok(estimateNumCtx('x'.repeat(33000 * 3.3), { headroomTokens: 0, minCtx: 16384, maxCtx: 131072, tokenScale: 1.1 }) === 65536,
+           'context size: the learned scale is counted when choosing the context to ask for');
     }
 
     {
@@ -4642,6 +4675,8 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
     eq(caps.warnings.length, 2, 'capabilities: empty warnings are dropped');
     eq(caps.warnings[1].length, 300, 'capabilities: a long warning is cut, not passed through whole');
     eq(normalizeCapabilities({ maxPanels: 'lots' }).maxPanels, null, 'capabilities: a malformed limit is no limit');
+    eq(normalizeCapabilities({ maxContext: 65536 }).maxContext, 65536, 'capabilities: the box publishes its reply context limit');
+    eq(normalizeCapabilities({}).maxContext, null, 'capabilities: a box that does not say leaves the app ceiling');
 
     eq(capped(10, null), 10, 'capped: no box limit keeps the app value');
     eq(capped(10, 2), 2, 'capped: the box can lower the app value');

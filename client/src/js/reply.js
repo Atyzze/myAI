@@ -1,13 +1,15 @@
 import { CONFIG, SETTINGS_DEFAULTS, getSetting, uid, confirmServerProcessing,
-         writeStored } from './config.js';
+         readStored, writeStored } from './config.js';
 import { dbExec, dbUpdate } from './db.js';
 import { estimateNumCtx, buildBudgetedPrompt, createReplyStreamReader,
          chooseReplyModel, isFallbackChoice, describeLoadedModel,
-         describeReplyCutoff } from './reply-core.js';
+         describeReplyCutoff, contextLengthFromShow, replyContextCeiling,
+         nextTokenScale, DEFAULT_TOKEN_SCALE } from './reply-core.js';
 import { loadedModelNames, isModelResident, nextModelStep, describeModelLoad,
          describeModelFailure, shouldRetryGenerate, describeFirstByteTimeout,
          sameModel, MODEL_KEEP_ALIVE, MODEL_GENERATE_ATTEMPTS,
          AI_NUM_CTX, AI_MAX_NUM_CTX, firstByteTimeoutMs } from './model-ready-core.js';
+import { boxCapabilities } from './capabilities.js';
 import { generationTiming, translationTimeoutMs, translationTimeoutError } from './translate-core.js';
 import { beginJob, endJob, abortError } from './jobs.js';
 import { replyStreamInit, replyStreamModel, replyStreamAppend, replyStreamDone,
@@ -22,6 +24,56 @@ const TRANSLATE_LOAD_GRACE_MS = 20000;
 const MODEL_LOOKUP_TIMEOUT_MS = 5000;
 
 const TAGS_TTL_MS = 60000;
+
+// The largest context each model supports, as Ollama reports it. Asked once per model per page;
+// a server that does not answer leaves the app's own ceiling in place.
+const _modelContext = new Map();
+
+async function modelContextLength(base, model) {
+    if (_modelContext.has(model)) return _modelContext.get(model);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), MODEL_LOOKUP_TIMEOUT_MS);
+    let length = null;
+    try {
+        const res = await fetch(`${base}/api/show`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+            signal: ctrl.signal
+        });
+        if (res.ok) length = contextLengthFromShow(await res.json());
+    } catch (_) {
+        length = null;
+    } finally {
+        clearTimeout(timer);
+    }
+    if (length != null) _modelContext.set(model, length);
+    return length;
+}
+
+// How much the model's real prompt count runs over the app's estimate, per model, kept between
+// visits so the next long prompt is budgeted with it from the start.
+const TOKEN_SCALE_KEY = 'ai-token-scale';
+
+function readTokenScales() {
+    try {
+        const parsed = JSON.parse(readStored(TOKEN_SCALE_KEY) || '{}');
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (_) {
+        return {};
+    }
+}
+
+function tokenScaleFor(model) {
+    const value = Number(readTokenScales()[model]);
+    return Number.isFinite(value) && value > 0 ? nextTokenScale(value, 0, 0) : DEFAULT_TOKEN_SCALE;
+}
+
+function learnTokenScale(model, estimatedTokens, actualTokens) {
+    const scales = readTokenScales();
+    scales[model] = nextTokenScale(tokenScaleFor(model), estimatedTokens, actualTokens);
+    writeStored(TOKEN_SCALE_KEY, JSON.stringify(scales));
+}
 let _tags = { at: 0, models: null };
 
 async function installedModels(base) {
@@ -323,19 +375,32 @@ function readWithIdleTimeout(reader, timeoutMs, ctrl) {
 export async function runSummary(recId, progressCallback, dropTId) {
     if (!confirmServerProcessing()) throw abortError('Server processing cancelled.');
     const ctrl = beginJob('r', recId);
-    let rec, targetT, budget, model;
+    let rec, targetT, budget, model, ceiling, tokenScale;
     const base = CONFIG.OLLAMA_URL.replace(/\/+$/, '');
     try {
         rec = await dbExec(CONFIG.STORE_REC, 'get', recId);
         targetT = getTargetTranscript(rec, dropTId);
         if (!targetT) throw new Error('Need a transcript first.');
+        model = await resolveReplyModel(base);
+        if (ctrl.signal.aborted) throw abortError();
+        const caps = boxCapabilities();
+        ceiling = replyContextCeiling({
+            model,
+            modelMax: model ? await modelContextLength(base, model) : null,
+            boxModel: caps.llm,
+            boxMax: caps.maxContext,
+            fallback: AI_MAX_NUM_CTX,
+            sameModelFn: sameModel
+        });
+        tokenScale = tokenScaleFor(model);
+        // The budget is in estimated tokens; the scale turns the room the model really has into
+        // the estimate's units, so the reply keeps its OUTPUT_RESERVE once the real count is in.
+        const promptRoom = Math.max(1, ceiling - OUTPUT_RESERVE);
         budget = buildBudgetedPrompt({
             instructions: getSetting('set-ai-instructions'),
             chain: getChain(rec),
             transcript: targetT.plain || targetT.text || ''
-        }, { maxCtx: AI_MAX_NUM_CTX, reserveTokens: OUTPUT_RESERVE });
-        model = await resolveReplyModel(base);
-        if (ctrl.signal.aborted) throw abortError();
+        }, { maxCtx: OUTPUT_RESERVE + Math.floor(promptRoom / tokenScale), reserveTokens: OUTPUT_RESERVE });
     } catch (err) {
         endJob('r', recId, ctrl);
         throw err;
@@ -343,7 +408,7 @@ export async function runSummary(recId, progressCallback, dropTId) {
     const resultGeneration = rec.resultGeneration || 0;
     const promptText = budget.prompt;
     const numCtx = estimateNumCtx(promptText, {
-        headroomTokens: OUTPUT_RESERVE, minCtx: AI_NUM_CTX, maxCtx: AI_MAX_NUM_CTX
+        headroomTokens: OUTPUT_RESERVE, minCtx: AI_NUM_CTX, maxCtx: ceiling, tokenScale
     });
     const firstByteMs = firstByteTimeoutMs(numCtx, CONFIG.REMOTE_FIRST_BYTE_TIMEOUT_MS);
 
@@ -432,6 +497,7 @@ export async function runSummary(recId, progressCallback, dropTId) {
             ...finish, numCtx, numPredict: NUM_PREDICT
         }) : '';
         if (cutoff) replyStreamAppend(recId, `\n\n${cutoff}`, streamGen);
+        if (finish && model) learnTokenScale(model, budget.estimatedTokens, finish.promptTokens);
         replyStreamDone(recId, streamGen);
         const storedText = cutoff ? `${fullText}\n\n${cutoff}` : fullText;
 
