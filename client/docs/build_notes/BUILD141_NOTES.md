@@ -33,4 +33,4 @@ Continuing a reply that was cut off is not offered: the prompt is now budgeted t
 
 Eight new mutation guards: an interrupted stream taken for complete, an interrupted reply stored without its end, a view that ends every reply on complete, the end not passed to the view, the recording not marking a reply that stopped short, thinking not reported, a dismissal that does not reach the stored recording, and a notice without its ✕.
 
-GATE_RESULT
+22 suites passed (strict gate) in 11 min 24 s; slowest mutation-guards (6 min 16 s)

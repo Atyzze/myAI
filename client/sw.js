@@ -1,4 +1,4 @@
-const VERSION     = 'v140';
+const VERSION     = 'v141';
 const SHELL_CACHE = `myai-shell-${VERSION}`;
 // From this build on, a new worker waits until a page asks it to take over (version.js). The pages
 // of earlier builds cannot ask, and expect it to take over by itself.
