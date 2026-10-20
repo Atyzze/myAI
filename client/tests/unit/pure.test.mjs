@@ -3423,6 +3423,32 @@ await testStitch();
     }
 
     {
+        const { replyOutcome } = await import('../../src/js/reply-core.js');
+        const lost = replyOutcome(null, { numCtx: 32768, numPredict: 10240 });
+        eq(lost.state, 'interrupted', 'reply outcome: a stream with no final object was interrupted, never complete');
+        ok(/^⚠️ Reply interrupted: the AI server stopped sending before the reply was finished/.test(lost.notice),
+           'reply outcome: and says so in words the reply keeps');
+        const whole = replyOutcome({ doneReason: 'stop', promptTokens: 2000, outputTokens: 900 }, { numCtx: 16384, numPredict: 10240 });
+        ok(whole.state === 'complete' && whole.notice === '', 'reply outcome: a reply the model finished is complete, with no notice');
+        const ctx = replyOutcome({ doneReason: 'length', promptTokens: 31500, outputTokens: 1268 }, { numCtx: 32768, numPredict: 10240 });
+        ok(ctx.state === 'cutoff' && ctx.reason === 'context' && /context window of 32,768 tokens/.test(ctx.notice),
+           'reply outcome: a reply the context window stopped is cut off by the context');
+        const limit = replyOutcome({ doneReason: 'length', promptTokens: 2000, outputTokens: 10240 }, { numCtx: 16384, numPredict: 10240 });
+        ok(limit.state === 'cutoff' && limit.reason === 'limit' && /reply limit/.test(limit.notice),
+           'reply outcome: a reply that used its whole budget is cut off by the reply limit');
+    }
+
+    {
+        const r = createReplyStreamReader();
+        const a = r.push(line({ thinking: 'Let', response: '' }) + line({ thinking: ' me see', response: '' }));
+        eq(drain(a), 'thinking,thinking', 'reply stream: reasoning before the answer is reported as thinking');
+        eq(a.map(e => e.count).join(','), '1,2', 'reply stream: and counted, so the view can show the model is at work');
+        eq(r.text, '', 'reply stream: reasoning is never part of the reply text');
+        eq(drain(r.push(line({ response: 'Yes' }) + line({ thinking: 'late', response: '' }))), 'first-token,token',
+           'reply stream: once the answer has begun, thinking is not reported again');
+    }
+
+    {
         const { contextLengthFromShow, replyContextCeiling, nextTokenScale, estimateNumCtx,
                 DEFAULT_TOKEN_SCALE, MIN_TOKEN_SCALE, MAX_TOKEN_SCALE } = await import('../../src/js/reply-core.js');
         eq(contextLengthFromShow({ model_info: { 'general.architecture': 'qwen3', 'qwen3.context_length': 262144 } }),

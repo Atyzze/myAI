@@ -203,8 +203,19 @@ export function createLiveLogRenderer({ transcriptEl, statusEl, footerEl, frame 
 
 const REPLY_TEXT_NODE_MAX_CHARS = 4096;
 
+// How a reply ended, as the first part of the view's status line. A reply that was cut off, broke
+// off or failed must never read as complete: its text may stop mid-sentence.
+export function replyEndLabel(state, reason = '') {
+    if (state === 'cutoff') return reason === 'limit' ? '✂️ Cut off at the reply limit' : '✂️ Cut off: context window full';
+    if (state === 'interrupted') return '⚠️ Interrupted before the end';
+    if (state === 'error') return '⚠️ Failed';
+    if (state === 'stopped') return '⏹ Stopped';
+    return '✅ Complete';
+}
+
 export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, footerEl, frame = null }) {
     let charCount = 0;
+    let thinkingCount = 0;
     let tokenCount = 0;
     let elapsedMs = 0;
     let model = '';
@@ -228,8 +239,10 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
 
     const generatingLabel = () => (model ? `⏳ Generating - ${model}` : '⏳ Generating...');
     const streamingLabel  = () => (model ? `⚡ Streaming - ${model}`  : '⚡ Streaming...');
-    const completeLabel   = () => {
-        const base = `✅ Complete - ${charCount} chars`;
+    const thinkingLabel   = () => (model ? `🤔 Thinking - ${model}`   : '🤔 Thinking...');
+    const waitingLabel    = () => (thinkingCount ? thinkingLabel() : generatingLabel());
+    const endLabel = (state, reason) => {
+        const base = `${replyEndLabel(state, reason)} - ${charCount} chars`;
         return model ? `${base} - ${model}` : base;
     };
 
@@ -270,13 +283,19 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 if (Number.isFinite(msg.count))     tokenCount = msg.count;
                 if (Number.isFinite(msg.elapsedMs)) elapsedMs  = msg.elapsedMs;
                 writeGatheredTokensOnNextFrame();
+            } else if (msg.type === 'thinking') {
+                if (Number.isFinite(msg.count)) thinkingCount = msg.count;
+                if (!charCount) {
+                    setText(statusEl, thinkingLabel());
+                    setText(footerEl, `${thinkingCount} thinking tok`);
+                }
             } else if (msg.type === 'model') {
                 model = String(msg.model ?? '');
-                setText(statusEl, charCount ? streamingLabel() : generatingLabel());
+                setText(statusEl, charCount ? streamingLabel() : waitingLabel());
             } else if (msg.type === 'done') {
                 writeGatheredTokens();
                 if (cursorEl) cursorEl.style.display = 'none';
-                setText(statusEl, completeLabel());
+                setText(statusEl, endLabel(msg.state, msg.reason));
                 setText(footerEl, progressLine());
             } else if (msg.type === 'reset') {
                 generation++;
@@ -284,6 +303,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 writeScheduled = false;
                 textEl.textContent = '';
                 charCount = 0;
+                thinkingCount = 0;
                 tokenCount = 0;
                 elapsedMs = 0;
                 if (cursorEl) cursorEl.style.display = '';

@@ -3,7 +3,7 @@ import { CONFIG, SETTINGS_DEFAULTS, getSetting, uid, confirmServerProcessing,
 import { dbExec, dbUpdate } from './db.js';
 import { estimateNumCtx, buildBudgetedPrompt, createReplyStreamReader,
          chooseReplyModel, isFallbackChoice, describeLoadedModel,
-         describeReplyCutoff, contextLengthFromShow, replyContextCeiling,
+         replyOutcome, contextLengthFromShow, replyContextCeiling,
          nextTokenScale, DEFAULT_TOKEN_SCALE } from './reply-core.js';
 import { loadedModelNames, isModelResident, nextModelStep, describeModelLoad,
          describeModelFailure, shouldRetryGenerate, describeFirstByteTimeout,
@@ -13,7 +13,7 @@ import { boxCapabilities } from './capabilities.js';
 import { generationTiming, translationTimeoutMs, translationTimeoutError } from './translate-core.js';
 import { beginJob, endJob, abortError } from './jobs.js';
 import { replyStreamInit, replyStreamModel, replyStreamAppend, replyStreamDone,
-         replyStreamStats } from './live-tabs.js';
+         replyStreamStats, replyStreamThinking } from './live-tabs.js';
 
 const NUM_PREDICT    = 10240;
 const OUTPUT_RESERVE = 10240;
@@ -420,7 +420,8 @@ export async function runSummary(recId, progressCallback, dropTId) {
     ctrl.signal.addEventListener('abort', onJobAbort, { once: true });
     let reader = null;
 
-    const askingMessage = (budget.droppedContext || budget.condensedContext || budget.truncatedTranscript || budget.truncatedInstructions)
+    const condensed = !!(budget.droppedContext || budget.condensedContext || budget.truncatedTranscript || budget.truncatedInstructions);
+    const askingMessage = condensed
         ? `Context condensed to fit ${numCtx.toLocaleString()} tokens...`
         : 'Asking server...';
 
@@ -469,11 +470,16 @@ export async function runSummary(recId, progressCallback, dropTId) {
         const decoder = new TextDecoder();
         const parser = createReplyStreamReader();
         let finish = null;
+        let thinkingSeen = false;
 
         const applyEvents = events => {
             for (const event of events) {
                 if (event.type === 'error') throw new Error(`Reply server: ${event.message}`);
-                if (event.type === 'first-token') progressCallback('__first_token__');
+                if (event.type === 'thinking') {
+                    replyStreamThinking(recId, event.count, streamGen);
+                    if (!thinkingSeen) { thinkingSeen = true; progressCallback('__thinking__'); }
+                }
+                else if (event.type === 'first-token') progressCallback('__first_token__');
                 else if (event.type === 'token') replyStreamAppend(recId, event.token, streamGen);
                 else if (event.type === 'done') { finish = event; progressCallback('Done'); }
             }
@@ -493,13 +499,13 @@ export async function runSummary(recId, progressCallback, dropTId) {
         if (!fullText.trim()) throw new Error('Reply server completed without returning text.');
 
         const measured = replyStreamStats(recId);
-        const cutoff = finish ? describeReplyCutoff({
-            ...finish, numCtx, numPredict: NUM_PREDICT
-        }) : '';
-        if (cutoff) replyStreamAppend(recId, `\n\n${cutoff}`, streamGen);
+        // A stream that ended without the server's final object never said it was done: it is kept,
+        // but marked interrupted, never saved as if it were a whole reply.
+        const outcome = replyOutcome(finish, { numCtx, numPredict: NUM_PREDICT });
+        if (outcome.notice) replyStreamAppend(recId, `\n\n${outcome.notice}`, streamGen);
         if (finish && model) learnTokenScale(model, budget.estimatedTokens, finish.promptTokens);
-        replyStreamDone(recId, streamGen);
-        const storedText = cutoff ? `${fullText}\n\n${cutoff}` : fullText;
+        replyStreamDone(recId, streamGen, outcome);
+        const storedText = outcome.notice ? `${fullText}\n\n${outcome.notice}` : fullText;
 
         const stored = await dbUpdate(CONFIG.STORE_REC, recId, (current) => {
             if (!current || (current.resultGeneration || 0) !== resultGeneration) return null;
@@ -510,7 +516,9 @@ export async function runSummary(recId, progressCallback, dropTId) {
                 text: storedText, source: 'S', time: Date.now(),
                 model,
                 tokenCount: measured ? measured.count : 0,
-                elapsedMs:  measured ? measured.elapsedMs : 0
+                elapsedMs:  measured ? measured.elapsedMs : 0,
+                ...(outcome.state !== 'complete' ? { end: { state: outcome.state, reason: outcome.reason } } : {}),
+                ...(condensed ? { condensed: true } : {})
             });
             delete current.pipelineError;
             delete current.pipelineErrorAt;
@@ -520,10 +528,10 @@ export async function runSummary(recId, progressCallback, dropTId) {
     } catch (err) {
         try { if (reader) await reader.cancel(); } catch (_) {}
         if (err && err.name === 'AbortError') {
-            replyStreamDone(recId, streamGen);
+            replyStreamDone(recId, streamGen, { state: 'stopped' });
         } else {
             replyStreamAppend(recId, `\n\n⚠️ ${err.message}`, streamGen);
-            replyStreamDone(recId, streamGen);
+            replyStreamDone(recId, streamGen, { state: 'error' });
             progressCallback('Error');
         }
         throw err;

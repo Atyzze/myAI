@@ -747,12 +747,13 @@ function buildRecordingItem(rec) {
             : rec.captureError?.kind === 'encoder'
                 ? 'the browser audio encoder failed'
                 : 'an audio segment could not be written to browser storage';
+    // The notice is stored on the recording, so it is dismissed there too: ✕ removes it for good.
     const captureWarningHtml = rec.captureError
-        ? `<div class="${rec.incompleteAudio ? 'rec-error' : 'rec-warning'}" role="alert">${rec.incompleteAudio
+        ? `<div class="${rec.incompleteAudio ? 'rec-error' : 'rec-warning'} rec-dismissible" role="alert"><span class="rec-notice-text">${rec.incompleteAudio
             ? `Recording stopped because ${escapeHtml(captureFailureReason)}. ${Number(rec.unsavedFragmentCount || 0)} segment(s), ${fmtBytes(Number(rec.unsavedBytes || 0))}, could not be stored. Previously committed audio is available below.`
             : (rec.captureError.kind === 'quota' || rec.captureError.kind === 'storage'
                 ? `Recording stopped because ${escapeHtml(captureFailureReason)}, but the failed segment was recovered before finalization.`
-                : `Recording stopped because ${escapeHtml(captureFailureReason)}. Audio captured before the failure was saved successfully.`)}</div>`
+                : `Recording stopped because ${escapeHtml(captureFailureReason)}. Audio captured before the failure was saved successfully.`)}</span><button class="rec-dismiss" data-action="dismissCaptureWarning" data-rec-id="${rec.id}" title="Dismiss this notice" aria-label="Dismiss this notice">✕</button></div>`
         : '';
 
     const recordingNow = AppState.recId != null;
@@ -963,6 +964,33 @@ function wireTranscriptDropdown(li, rec, allT, allS) {
     renderReplies(li, rec, allT, allS, initialTId);
 }
 
+// A reply that stopped short of its end, or was written from a shortened context, says so on the
+// recording, so it is never taken for a whole answer from the preview alone.
+const REPLY_END_MARKS = {
+    cutoff:      ['✂️ Cut off', 'The model was stopped before it finished; the notice at the end of the reply says which limit.'],
+    interrupted: ['⚠️ Interrupted', 'The AI server stopped sending before the reply was finished, without saying why.']
+};
+
+function replyEndMark(s) {
+    const mark = s && s.end ? REPLY_END_MARKS[s.end.state] : null;
+    return mark ? mark[0] : '';
+}
+
+function replyMarksHtml(s) {
+    const marks = [];
+    const mark = s && s.end ? REPLY_END_MARKS[s.end.state] : null;
+    if (mark) marks.push(`<span class="reply-mark reply-mark-end" title="${escapeAttr(mark[1])}">${escapeHtml(mark[0])}</span>`);
+    if (s && s.condensed) {
+        marks.push('<span class="reply-mark" title="The context was too long for the model, so it was shortened before it was sent. Removing context items avoids this.">🗜️ Context shortened</span>');
+    }
+    return marks.join('');
+}
+
+function replyPreviewHtml(rec, s) {
+    return `<div class="sel-preview-text">${escapeHtml((s.text || '').substring(0, 200))}</div>`
+        + `<div class="sel-preview-foot">${replyMarksHtml(s)}<button class="btn-copy" data-copy="s" data-rec="${rec.id}" title="Copy to clipboard" aria-label="Copy reply to clipboard">📋</button></div>`;
+}
+
 function renderReplies(li, rec, allT, allS, activeTId, selectNewest = false) {
     const wrap  = li.querySelector(`#sreply-wrap-${rec.id}`);
     const sDrop = li.querySelector(`#drop-s-${rec.id}`);
@@ -987,7 +1015,8 @@ function renderReplies(li, rec, allT, allS, activeTId, selectNewest = false) {
         const num     = filteredS.length - idx;
         const size    = fmtSize((s.text || '').length);
         const snippet = escapeHtml((s.text || '').substring(0, 45));
-        return `<option value="${escapeAttr(s.id)}">(${num}) [${escapeHtml(s.source)}] ${size} - ${snippet}…</option>`;
+        const endMark = replyEndMark(s);
+        return `<option value="${escapeAttr(s.id)}">(${num}) [${escapeHtml(s.source)}] ${size}${endMark ? ` ${escapeHtml(endMark)}` : ''} - ${snippet}…</option>`;
     }).join('');
 
     const prevSVal = (!selectNewest && sDrop) ? sDrop.value : null;
@@ -996,7 +1025,6 @@ function renderReplies(li, rec, allT, allS, activeTId, selectNewest = false) {
         : pickSelection(filteredS, _selectedSId.get(rec.id))
           ?? ((prevSVal && filteredS.find(s => s.id == prevSVal)) ? prevSVal : filteredS[0].id);
     const activeS = filteredS.find(s => s.id == pickedId) || filteredS[0];
-    const sPreview = escapeHtml((activeS.text || '').substring(0, 200));
 
     const selectorHtml = compact
         ? `<select class="action-drop" id="drop-s-inner-${rec.id}" style="display:none">${opts}</select>`
@@ -1007,7 +1035,7 @@ function renderReplies(li, rec, allT, allS, activeTId, selectNewest = false) {
 
     wrap.innerHTML = `
     ${selectorHtml}
-    <div class="sel-preview" id="sprev-${rec.id}" role="button" tabindex="0" aria-label="View full reply" data-view="summary" data-rec="${rec.id}"><div class="sel-preview-text">${sPreview}</div><div class="sel-preview-foot"><button class="btn-copy" data-copy="s" data-rec="${rec.id}" title="Copy to clipboard" aria-label="Copy reply to clipboard">📋</button></div></div>`;
+    <div class="sel-preview" id="sprev-${rec.id}" role="button" tabindex="0" aria-label="View full reply" data-view="summary" data-rec="${rec.id}">${replyPreviewHtml(rec, activeS)}</div>`;
 
     if (sDrop) {
         sDrop.innerHTML = filteredS.map(s => `<option value="${escapeAttr(s.id)}"></option>`).join('');
@@ -1024,8 +1052,7 @@ function renderReplies(li, rec, allT, allS, activeTId, selectNewest = false) {
             if (sDrop) sDrop.value = s.id;
             const prev = li.querySelector(`#sprev-${rec.id}`);
             if (prev) {
-                prev.innerHTML = `<div class="sel-preview-text">${escapeHtml((s.text || '').substring(0, 200))}</div>`
-                + `<div class="sel-preview-foot"><button class="btn-copy" data-copy="s" data-rec="${rec.id}" title="Copy to clipboard">📋</button></div>`;
+                prev.innerHTML = replyPreviewHtml(rec, s);
                 wireCopyButtons(li, rec, allT, allS);
             }
         });
@@ -1176,6 +1203,9 @@ function wireReplyButtons(li, rec, allT, allS) {
                 if (text === '__first_token__') {
                     button.textContent = '⚡ Streaming...';
                     updateLiveStatus(rec.id, 'reply', '⚡ Streaming… (tap to watch)');
+                } else if (text === '__thinking__') {
+                    button.textContent = '🤔 Thinking...';
+                    updateLiveStatus(rec.id, 'reply', '🤔 Thinking… (tap to watch)');
                 } else {
                     button.textContent = text;
                 }
@@ -1393,6 +1423,22 @@ window.pinRec = async function pinRec(id, pinned) {
     return changed;
 };
 
+// Dismissing the notice about a recording that stopped on a capture failure removes it from the
+// stored recording, so it does not come back on the next repaint or the next visit. The audio, the
+// "(incomplete)" in the name and everything else about the recording stay as they are.
+window.dismissCaptureWarning = async function dismissCaptureWarning(id) {
+    const key = Number(id);
+    let changed = false;
+    await dbUpdate(CONFIG.STORE_REC, key, (rec) => {
+        if (!rec || rec.processing || rec.deleting || !rec.captureError) return null;
+        delete rec.captureError;
+        changed = true;
+        return rec;
+    });
+    await renderList({ force: true });
+    return changed;
+};
+
 window.downloadRec = async function downloadRec(id) {
     const key = Number(id);
     const rec = await dbExec(CONFIG.STORE_REC, 'get', key);
@@ -1457,6 +1503,7 @@ export function wireActionDelegation() {
             case 'continueConv': return window.continueConv(recId);
             case 'toggleLinkRec': return window.toggleLinkRec(recId, el.dataset.linkLabel || '');
             case 'pinRec': return window.pinRec(recId, el.dataset.pin === '1');
+            case 'dismissCaptureWarning': return window.dismissCaptureWarning(recId);
             case 'downloadRec': return window.downloadRec(recId);
             case 'deleteTranscript': {
                 const selected = document.getElementById(`drop-t-${recId}`)?.value;

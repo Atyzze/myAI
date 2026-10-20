@@ -154,8 +154,8 @@ export const mutations = [
     {
         id: 'MUT-STREAM-REINIT-REPLACE',
         file: 'src/js/live-tabs.js',
-        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', done: false })\n         .generation;',
-        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', done: false, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
+        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, done: false, end: null })\n         .generation;',
+        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, done: false, end: null, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /tokens still reach a popup opened before the stream was re-initialised/
     },
@@ -3757,5 +3757,69 @@ export const mutations = [
         to: "            else if (false) text = withTranslations({ timestamped: spokenPart(item.text), plain: item.plain }, live).timestamped;",
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /each answer is kept as it comes, and reaches the transcript the row shows/
+    },
+    {
+        id: 'MUT-REPLY-INTERRUPT-AS-COMPLETE',
+        file: 'src/js/reply-core.js',
+        from: '    if (!finish) {\n        return {\n            state: \'interrupted\',',
+        to: '    if (false) {\n        return {\n            state: \'interrupted\',',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /a stream with no final object was interrupted, never complete/
+    },
+    {
+        id: 'MUT-REPLY-INTERRUPT-NOT-STORED',
+        file: 'src/js/reply.js',
+        from: "                ...(outcome.state !== 'complete' ? { end: { state: outcome.state, reason: outcome.reason } } : {}),",
+        to: "                ...(false ? { end: { state: outcome.state, reason: outcome.reason } } : {}),",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a stream that ends without the server's final object is stored as interrupted/
+    },
+    {
+        id: 'MUT-REPLY-END-READS-COMPLETE',
+        file: 'src/js/live-render.js',
+        from: '                setText(statusEl, endLabel(msg.state, msg.reason));',
+        to: "                setText(statusEl, endLabel('complete', ''));",
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /a reply that ended cutoff context says so/
+    },
+    {
+        id: 'MUT-REPLY-END-NOT-PASSED',
+        file: 'src/js/reply.js',
+        from: '        replyStreamDone(recId, streamGen, outcome);',
+        to: '        replyStreamDone(recId, streamGen);',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the reply view ends on interrupted, not complete/
+    },
+    {
+        id: 'MUT-REPLY-END-UNMARKED',
+        file: 'src/js/gui.js',
+        from: '        + `<div class="sel-preview-foot">${replyMarksHtml(s)}<button',
+        to: '        + `<div class="sel-preview-foot"><button',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the recording marks the reply interrupted, in its preview and in the list of replies/
+    },
+    {
+        id: 'MUT-THINKING-HIDDEN',
+        file: 'src/js/reply-core.js',
+        from: '        if (obj.thinking && !firstTokenSeen) {',
+        to: '        if (false) {',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /reasoning before the answer is reported as thinking/
+    },
+    {
+        id: 'MUT-CAPTURE-DISMISS-NOT-STORED',
+        file: 'src/js/gui.js',
+        from: '        delete rec.captureError;\n        changed = true;',
+        to: '        changed = true;',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /it is removed from the stored recording, and nothing else about the recording changes/
+    },
+    {
+        id: 'MUT-CAPTURE-DISMISS-MISSING',
+        file: 'src/js/gui.js',
+        from: '<button class="rec-dismiss" data-action="dismissCaptureWarning" data-rec-id="${rec.id}"',
+        to: '<button class="rec-dismiss" data-rec-id="${rec.id}"',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the notice offers ✕ to dismiss it/
     },
 ];

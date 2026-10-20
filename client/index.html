@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="140">
+<meta name="myai-build" content="141">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -165,7 +165,10 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .sel-preview:hover { border-color: #555; }
 .sel-preview-text { color: #999; font-family: monospace; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .sel-preview:hover .sel-preview-text { color: #bbb; }
-.sel-preview-foot { display: flex; justify-content: flex-end; }
+.sel-preview-foot { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
+.reply-mark { font: 11px/1.4 monospace; color: #9a9a9a; border: 1px solid #333; border-radius: 4px; padding: 1px 5px; }
+.reply-mark-end { color: #ffd27a; border-color: #7a642f; }
+.sel-preview-foot .btn-copy { margin-left: auto; }
 .btn-copy { background: none; border: 1px solid transparent; border-radius: 4px; color: #444; font-size: 13px; padding: 1px 5px; cursor: pointer; transition: .15s; flex-shrink: 0; }
 .btn-copy:hover { color: #aaa; border-color: #444; }
 
@@ -314,6 +317,10 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .rec-item>.btn-row{display:flex;gap:8px}.rec-item>.btn-row button{flex:1}
 .rec-error{border:1px solid #7a3434;background:#1b0c0c;color:#ffb4b4;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left;overflow-wrap:anywhere}
 .rec-warning{border:1px solid #7a642f;background:#1b1608;color:#ffd27a;border-radius:8px;padding:9px 11px;font:12px/1.45 monospace;text-align:left;overflow-wrap:anywhere}
+.rec-dismissible{display:flex;align-items:flex-start;gap:8px}
+.rec-dismissible>.rec-notice-text{flex:1;min-width:0}
+.rec-dismiss{background:transparent;border:1px solid currentColor;color:inherit;border-radius:6px;width:24px;height:24px;min-width:24px;font-size:11px;line-height:1;display:flex;align-items:center;justify-content:center;padding:0;opacity:.7;cursor:pointer}
+.rec-dismiss:hover,.rec-dismiss:focus-visible{opacity:1;background:rgba(255,255,255,.08)}
 .rec-highlight{animation:rec-highlight 1.6s ease-out}
 @keyframes rec-highlight{0%,35%{box-shadow:0 0 0 3px rgba(92,196,106,.65)}100%{box-shadow:none}}
 :focus-visible{outline:2px solid #8ec7ff;outline-offset:3px}

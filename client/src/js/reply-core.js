@@ -253,6 +253,7 @@ export function createReplyStreamReader() {
     let buffer = '';
     let text = '';
     let firstTokenSeen = false;
+    let thinkingCount = 0;
 
     function consumeLine(line, events) {
         const trimmed = line.trim();
@@ -262,6 +263,12 @@ export function createReplyStreamReader() {
         if (obj.error) {
             events.push({ type: 'error', message: String(obj.error) });
             return;
+        }
+        // A thinking model streams its reasoning in its own field before the answer. Counting it
+        // is what lets the view say the model is still at work rather than show nothing for minutes.
+        if (obj.thinking && !firstTokenSeen) {
+            thinkingCount += 1;
+            events.push({ type: 'thinking', count: thinkingCount });
         }
         if (obj.response) {
             if (!firstTokenSeen) {
@@ -302,6 +309,29 @@ export function createReplyStreamReader() {
     };
 }
 
+// What a reply stream ended as, from the server's final object (null when none arrived):
+//   complete     the model finished on its own;
+//   cutoff       the model was stopped by the context window ('context') or the reply limit ('limit');
+//   interrupted  the stream ended without a final object, so the server never said it was done:
+//                the connection dropped, or the server stopped (on a long context, often out of memory).
+// The notice is appended to the reply, so the stored text says it too, and the state names the end
+// in the view's status line and on the recording.
+export function replyOutcome(finish, { numCtx = 0, numPredict = 0 } = {}) {
+    if (!finish) {
+        return {
+            state: 'interrupted',
+            reason: 'stream',
+            notice: '⚠️ Reply interrupted: the AI server stopped sending before the reply was finished, '
+                + 'without saying why. The connection may have dropped, or the server may have run out of '
+                + 'memory on a long context; removing or shortening context items helps.'
+        };
+    }
+    const reason = replyCutoffReason({ ...finish, numCtx, numPredict });
+    if (!reason) return { state: 'complete', reason: '', notice: '' };
+    return { state: 'cutoff', reason, notice: describeReplyCutoff({ ...finish, numCtx, numPredict }) };
+}
+
+
 // Ollama's real token counts (prompt_eval_count, eval_count) only arrive with the final stream
 // object. A reply that filled the model's context window, or used up its output budget, ends
 // mid-sentence without an error, so this turns how it stopped into a notice the person can see.
@@ -311,24 +341,35 @@ export function createReplyStreamReader() {
 // only the part it had to read again.
 const CONTEXT_FULL_MARGIN_TOKENS = 16;
 
+export function replyCutoffReason({ doneReason = '', promptTokens = 0, outputTokens = 0,
+                                    numCtx = 0, numPredict = 0 } = {}) {
+    const prompt = Math.max(0, Number(promptTokens) || 0);
+    const output = Math.max(0, Number(outputTokens) || 0);
+    const ctx = Math.max(0, Number(numCtx) || 0);
+    const limit = Math.max(0, Number(numPredict) || 0);
+    const outputFull = limit > 0 && output >= limit;
+    const contextFull = !outputFull && (
+        doneReason === 'length'
+        || (ctx > 0 && prompt > 0 && prompt + output >= ctx - CONTEXT_FULL_MARGIN_TOKENS));
+    if (contextFull) return 'context';
+    if (outputFull || doneReason === 'length') return 'limit';
+    return '';
+}
+
 export function describeReplyCutoff({ doneReason = '', promptTokens = 0, outputTokens = 0,
                                       numCtx = 0, numPredict = 0 } = {}) {
-    const prompt = Math.max(0, Number(promptTokens) || 0);
     const output = Math.max(0, Number(outputTokens) || 0);
     const ctx = Math.max(0, Number(numCtx) || 0);
     const limit = Math.max(0, Number(numPredict) || 0);
     const fmt = n => n.toLocaleString('en-US');
 
-    const outputFull = limit > 0 && output >= limit;
-    const contextFull = !outputFull && (
-        doneReason === 'length'
-        || (ctx > 0 && prompt > 0 && prompt + output >= ctx - CONTEXT_FULL_MARGIN_TOKENS));
-    if (contextFull) {
+    const reason = replyCutoffReason({ doneReason, promptTokens, outputTokens, numCtx, numPredict });
+    if (reason === 'context') {
         return `⚠️ Reply cut off: the model's context window${ctx ? ` of ${fmt(ctx)} tokens` : ''} was full `
             + `after ${fmt(output)} reply tokens (thinking included). `
             + `Remove or shorten context items to leave more room for the reply.`;
     }
-    if (outputFull || doneReason === 'length') {
+    if (reason === 'limit') {
         return `⚠️ Reply cut off: it reached the reply limit`
             + `${limit > 0 ? ` of ${fmt(limit)} tokens` : ''}, which includes the model's thinking.`;
     }

@@ -141,7 +141,7 @@ const _replyStreamOrder = [];
 
 export function replyStreamInit(recId)   {
   return resetEntry(_replyStreams, _replyStreamOrder, recId,
-                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', done: false })
+                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', thinking: 0, done: false, end: null })
          .generation;
 }
 
@@ -167,17 +167,35 @@ export function replyStreamAppend(recId, token, generation = null) {
   entry.listeners.forEach(fn => fn({ type: 'token', token, ...stats }));
 }
 
-export function replyStreamDone(recId, generation = null) {
+// The model is still reasoning before its answer: count goes up with each piece of thinking.
+export function replyStreamThinking(recId, count, generation = null) {
+  if (!_replyStreams[recId]) replyStreamInit(recId);
+  const entry = _replyStreams[recId];
+  if (!ownsEntry(entry, generation)) return;
+  entry.thinking = Math.max(0, Number(count) || 0);
+  entry.listeners.forEach(fn => fn({ type: 'thinking', count: entry.thinking }));
+}
+
+// end says how the reply ended ({ state, reason }: complete, cutoff, interrupted, error, stopped),
+// so the view never calls a reply that stopped short complete.
+export function replyStreamDone(recId, generation = null, end = null) {
   const s = _replyStreams[recId];
   if (!s || s.done) return;
   if (!ownsEntry(s, generation)) return;
   s.done = true;
-  s.listeners.forEach(fn => fn({ type: 'done' }));
+  s.end = normalEnd(end);
+  s.listeners.forEach(fn => fn({ type: 'done', ...s.end }));
+}
+
+function normalEnd(end) {
+  const state = end && end.state ? String(end.state) : 'complete';
+  return { state, reason: end && end.reason ? String(end.reason) : '' };
 }
 
 function replyStreamSnapshot(entry) {
   const messages = [];
   if (entry.model) messages.push({ type: 'model', model: entry.model });
+  if (entry.thinking && !entry.tokens) messages.push({ type: 'thinking', count: entry.thinking });
   if (entry.tokens) {
     messages.push({
       type: 'token',
@@ -186,7 +204,7 @@ function replyStreamSnapshot(entry) {
       elapsedMs: Math.max(0, entry.lastAt - entry.firstAt)
     });
   }
-  if (entry.done)   messages.push({ type: 'done' });
+  if (entry.done)   messages.push({ type: 'done', ...normalEnd(entry.end) });
   return messages;
 }
 
@@ -243,7 +261,7 @@ export function replyStreamStats(recId) {
   };
 }
 
-function finishedReplyEntry({ text, model, tokenCount, elapsedMs }) {
+function finishedReplyEntry({ text, model, tokenCount, elapsedMs, end = null }) {
   const span = Math.max(0, Number(elapsedMs) || 0);
   return {
     tokens:  String(text || ''),
@@ -252,6 +270,7 @@ function finishedReplyEntry({ text, model, tokenCount, elapsedMs }) {
     lastAt:  span ? span + 1 : 0,
     model:   String(model || ''),
     done:    true,
+    end:     normalEnd(end),
     listeners: []
   };
 }
@@ -306,10 +325,10 @@ function openSavedView({ key, windowName, kind, label, entry }) {
   return win;
 }
 
-export function openSavedReplyView({ key, windowName, label, text, model, tokenCount, elapsedMs }) {
+export function openSavedReplyView({ key, windowName, label, text, model, tokenCount, elapsedMs, end = null }) {
   return openSavedView({
     key, windowName, kind: 'replystream', label,
-    entry: finishedReplyEntry({ text, model, tokenCount, elapsedMs })
+    entry: finishedReplyEntry({ text, model, tokenCount, elapsedMs, end })
   });
 }
 

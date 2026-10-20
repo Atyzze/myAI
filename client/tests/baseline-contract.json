@@ -2075,6 +2075,34 @@
         "MUT-REUSED-READING-WITHOUT-TRANSLATIONS",
         "MUT-REFRESH-SKIPS-SHOWN-READING"
       ]
+    },
+    {
+      "id": "REPLY-END-SHOWN-001",
+      "title": "A reply that did not end on its own never reads as complete: one the context window or the reply limit stopped is marked cut off and names the limit, one whose stream ended without the server saying it was done is kept but marked interrupted, in the reply's own text, in the reply view's status line and on the recording; and a model still reasoning before its answer is shown thinking rather than nothing",
+      "suites": [
+        "pure",
+        "live-view-unit",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-REPLY-INTERRUPT-AS-COMPLETE",
+        "MUT-REPLY-INTERRUPT-NOT-STORED",
+        "MUT-REPLY-END-READS-COMPLETE",
+        "MUT-REPLY-END-NOT-PASSED",
+        "MUT-REPLY-END-UNMARKED",
+        "MUT-THINKING-HIDDEN"
+      ]
+    },
+    {
+      "id": "CAPTURE-NOTICE-DISMISS-001",
+      "title": "The notice on a recording that stopped on a capture failure has a ✕ that removes it from the stored recording, so it stays gone after the app is opened again; the audio and the recording's incomplete mark stay, and a recording still being saved keeps its failure",
+      "suites": [
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-CAPTURE-DISMISS-NOT-STORED",
+        "MUT-CAPTURE-DISMISS-MISSING"
+      ]
     }
   ],
   "untestedModules": []
