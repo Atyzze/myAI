@@ -128,6 +128,9 @@ async function runAutoReply(recId) {
             if (text === '__first_token__') {
                 button.textContent = '⚡ Streaming...';
                 updateLiveStatus(recId, 'reply', '⚡ Streaming… (tap to watch)');
+            } else if (text === '__thinking__') {
+                button.textContent = '🤔 Thinking...';
+                updateLiveStatus(recId, 'reply', '🤔 Thinking… (tap to watch)');
             } else {
                 button.textContent = text;
             }

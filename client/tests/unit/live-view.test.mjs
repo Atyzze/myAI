@@ -658,6 +658,32 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     ok(footerEl.textContent === '7 chars · 2 tok · 4.0 tok/s',
        'the final throughput stays on screen');
 
+    // How the reply ended is the status it ends on: only a reply the model finished reads as complete.
+    for (const [state, reason, expected] of [
+        ['cutoff', 'context', '✂️ Cut off: context window full - 7 chars - gemma4:e4b'],
+        ['cutoff', 'limit', '✂️ Cut off at the reply limit - 7 chars - gemma4:e4b'],
+        ['interrupted', '', '⚠️ Interrupted before the end - 7 chars - gemma4:e4b'],
+        ['error', '', '⚠️ Failed - 7 chars - gemma4:e4b'],
+        ['stopped', '', '⏹ Stopped - 7 chars - gemma4:e4b'],
+        ['complete', '', '✅ Complete - 7 chars - gemma4:e4b']
+    ]) {
+        renderer.handle({ type: 'done', state, reason });
+        ok(statusEl.textContent === expected, `a reply that ended ${state} ${reason} says so (${statusEl.textContent})`);
+    }
+
+    const thinkStatus = make(), thinkFooter = make();
+    const thinker = render.createReplyRenderer({
+        replyEl: make(), textEl: make(), cursorEl: make(), statusEl: thinkStatus, footerEl: thinkFooter
+    });
+    thinker.handle({ type: 'model', model: 'qwen3:8b' });
+    thinker.handle({ type: 'thinking', count: 42 });
+    ok(thinkStatus.textContent === '🤔 Thinking - qwen3:8b' && thinkFooter.textContent === '42 thinking tok',
+       'a model still reasoning is shown thinking, with how far it is, instead of nothing');
+    thinker.handle({ type: 'model', model: 'qwen3:8b' });
+    ok(thinkStatus.textContent === '🤔 Thinking - qwen3:8b', 'naming the model again keeps it thinking');
+    thinker.handle({ type: 'token', token: 'Yes', count: 1, elapsedMs: 0 });
+    ok(thinkStatus.textContent === '⚡ Streaming - qwen3:8b', 'its first word moves it on to streaming');
+
     renderer.handle({ type: 'reset' });
     ok(textEl.textContent === '' && cursorEl.style.display === '',
        'a re-initialised stream clears the previous answer instead of appending to it');
@@ -733,6 +759,14 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     ok(replyOverlay.querySelector('.live-inline-cursor').style.display === 'none',
        'a finished answer shows no streaming cursor');
     replyHandle.close();
+
+    const cutHandle = live.openSavedReplyView({
+        key: 'saved-reply-1003-2', label: 'phone.wav',
+        text: 'half', model: 'gemma4:e4b', tokenCount: 4, elapsedMs: 1000, end: { state: 'cutoff', reason: 'context' }
+    });
+    ok(overlayNow().querySelector('.live-inline-status').textContent === '✂️ Cut off: context window full - 4 chars - gemma4:e4b',
+       'a stored reply that was cut off opens saying so, not complete');
+    cutHandle.close();
 
     const logHandle = live.openSavedTranscriptView({
         key: 'saved-transcript-1004-1', label: 'phone.wav',

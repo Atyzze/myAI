@@ -974,7 +974,8 @@ async function viewSummaryById(recId, sId) {
         text:  item.text || '',
         model:      item.model,
         tokenCount: item.tokenCount,
-        elapsedMs:  item.elapsedMs
+        elapsedMs:  item.elapsedMs,
+        end:        item.end || null
     });
 }
 

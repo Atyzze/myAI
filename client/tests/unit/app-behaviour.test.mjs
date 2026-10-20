@@ -557,6 +557,8 @@ function zipEntries(bytes) {
     const { AI_NUM_CTX } = await import('../../src/js/model-ready-core.js');
     const requests = [];
     let firstByteDelayMs = 0;
+    const DEFAULT_GENERATE = '{"response":"The answer.","done":false}\n{"response":"","done":true}\n';
+    let generateBody = DEFAULT_GENERATE;
     const realFetch = globalThis.fetch;
     globalThis.fetch = async (url, init = {}) => {
         const path = String(url);
@@ -569,7 +571,7 @@ function zipEntries(bytes) {
                 const timer = setTimeout(resolve, firstByteDelayMs);
                 if (init.signal) init.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
             });
-            return new Response('{"response":"The answer.","done":false}\n{"response":"","done":true}\n', { status: 200 });
+            return new Response(generateBody, { status: 200 });
         }
         return json({});
     };
@@ -581,8 +583,9 @@ function zipEntries(bytes) {
         requests.length = 0;
         const id = await addRecording({ filename: recName, transcripts: [{ id: 1, text: transcript, plain: transcript, time: Date.now() }] });
         let failure = '';
-        try { await reply.runSummary(id, () => {}); } catch (err) { failure = `${err.name}: ${err.message}`; }
-        return { id, failure, stored: (await row(id)).summaries || [] };
+        const progress = [];
+        try { await reply.runSummary(id, text => progress.push(text)); } catch (err) { failure = `${err.name}: ${err.message}`; }
+        return { id, failure, progress, stored: (await row(id)).summaries || [] };
     };
 
     const short = await askedWith('We agreed to ship on Friday.', 'short');
@@ -602,7 +605,101 @@ function zipEntries(bytes) {
     const longGenerate = requests.find(request => request.path.endsWith('/api/generate'));
     ok(longGenerate && longGenerate.body.options.num_ctx > AI_NUM_CTX && long.stored.length === 1,
        `reply: a reply that needs a larger context waits for its first word according to the context it needs, since the model reloads first (${long.failure})`);
+    ok(!('end' in short.stored[0]) && !short.stored[0].condensed,
+       'reply end: a reply the model finished on its own is stored as whole, with no mark');
+
+    // How a reply ended is kept with it and shown on the recording, so a reply that stopped short
+    // is never taken for a whole one.
+    const gui = await import('../../src/js/gui.js');
+    const live = await import('../../src/js/live-tabs.js');
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowNodeOf = recId => walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`);
+    const rowHtml = recId => {
+        const node = rowNodeOf(recId);
+        return node ? `${node.innerHTML}${node.querySelector(`#sreply-wrap-${recId}`).innerHTML}` : '';
+    };
+    const lastDone = recId => {
+        let done = null;
+        live.subscribeReplyStream(recId, msg => { if (msg.type === 'done') done = msg; })();
+        return done;
+    };
+
+    generateBody = '{"response":"- first point\\n- second","done":false}\n';
+    const dropped = await askedWith('We agreed to ship on Friday.', 'dropped');
+    const droppedReply = dropped.stored[0];
+    ok(droppedReply && droppedReply.end && droppedReply.end.state === 'interrupted',
+       `reply end: a stream that ends without the server's final object is stored as interrupted, not as a whole reply (${dropped.failure} ${JSON.stringify(droppedReply && droppedReply.end)})`);
+    ok(droppedReply && /^- first point\n- second\n\n⚠️ Reply interrupted: the AI server stopped sending before the reply was finished/.test(droppedReply.text),
+       `reply end: what arrived is kept, and the reply itself says it was interrupted (${droppedReply && droppedReply.text})`);
+    eq((lastDone(dropped.id) || {}).state, 'interrupted', 'reply end: the reply view ends on interrupted, not complete');
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/class="reply-mark reply-mark-end"[^>]*>⚠️ Interrupted</.test(rowHtml(dropped.id)) && /⚠️ Interrupted - /.test(rowHtml(dropped.id)),
+       'reply end: the recording marks the reply interrupted, in its preview and in the list of replies');
+
+    generateBody = '{"response":"Half an ans","done":false}\n{"response":"","done":true,"done_reason":"length","prompt_eval_count":400,"eval_count":900}\n';
+    const clipped = await askedWith('We agreed to ship on Friday.', 'clipped');
+    ok(clipped.stored[0] && clipped.stored[0].end && clipped.stored[0].end.state === 'cutoff' && clipped.stored[0].end.reason === 'context'
+       && /⚠️ Reply cut off: the model's context window/.test(clipped.stored[0].text),
+       `reply end: a reply the context window stopped is stored as cut off, and says which limit (${JSON.stringify(clipped.stored[0] && clipped.stored[0].end)})`);
+    eq((lastDone(clipped.id) || {}).state, 'cutoff', 'reply end: the reply view ends on cut off, not complete');
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/class="reply-mark reply-mark-end"[^>]*>✂️ Cut off</.test(rowHtml(clipped.id)),
+       'reply end: the recording marks the reply cut off');
+
+    generateBody = '{"thinking":"Let me","response":"","done":false}\n{"thinking":" see.","response":"","done":false}\n'
+        + '{"response":"Fine.","done":false}\n{"response":"","done":true,"done_reason":"stop"}\n';
+    const thought = await askedWith('We agreed to ship on Friday.', 'thought');
+    const thinkingAt = thought.progress.indexOf('__thinking__');
+    ok(thinkingAt >= 0 && thinkingAt < thought.progress.indexOf('__first_token__')
+       && thought.progress.filter(text => text === '__thinking__').length === 1,
+       `reply thinking: a model that reasons first says so once, before its first word (${thought.progress.join(' | ')})`);
+    ok(thought.stored[0] && thought.stored[0].text === 'Fine.' && !thought.stored[0].end,
+       'reply thinking: the reasoning is not stored as the reply, and the reply is whole');
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/Fine\./.test(rowHtml(thought.id)) && !/reply-mark/.test(rowHtml(thought.id)), 'reply end: a whole reply carries no mark');
+
+    generateBody = DEFAULT_GENERATE;
     globalThis.fetch = realFetch;
+}
+
+// A recording that stopped on a capture failure carries a notice; ✕ dismisses it for good.
+{
+    await clearAll();
+    const gui = await import('../../src/js/gui.js');
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowHtml = recId => (walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`) || {}).innerHTML || '';
+    const captureError = { kind: 'microphone', message: 'Microphone input ended unexpectedly.', occurredAt: Date.now() };
+    const id = await addRecording({ filename: 'mic lost', captureError }, { audio: wav(1) });
+    const lost = await addRecording({ filename: 'mic lost (incomplete)', captureError, incompleteAudio: true,
+                                      unsavedFragmentCount: 2, unsavedBytes: 2048 }, { audio: wav(1) });
+    const saving = await addRecording({ filename: 'still saving', captureError, processing: true, captureState: 'finalize-error' });
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/the microphone input ended unexpectedly\. Audio captured before the failure was saved successfully/.test(rowHtml(id))
+       && /data-action="dismissCaptureWarning" data-rec-id="\d+"/.test(rowHtml(id)),
+       'capture notice: the notice offers ✕ to dismiss it');
+    ok(/data-action="dismissCaptureWarning"/.test(rowHtml(lost)), 'capture notice: so does the notice about audio that could not be stored');
+
+    ok(await window.dismissCaptureWarning(id), 'capture notice: a tap on ✕ dismisses it');
+    const after = await row(id);
+    ok(!after.captureError && Number(after.audioBytes) > 0 && after.filename === 'mic lost',
+       'capture notice: it is removed from the stored recording, and nothing else about the recording changes');
+    ok(!/ended unexpectedly/.test(rowHtml(id)), 'capture notice: and is gone from the row');
+    page.reset();
+    await gui.renderList({ force: true });
+    await settle();
+    ok(!/ended unexpectedly/.test(rowHtml(id)) && /ended unexpectedly/.test(rowHtml(lost)),
+       'capture notice: it stays gone when the app is opened again, and only the dismissed one goes');
+
+    ok(await window.dismissCaptureWarning(lost), 'capture notice: the notice about lost audio can be dismissed too');
+    const lostAfter = await row(lost);
+    ok(!lostAfter.captureError && lostAfter.incompleteAudio === true && / \(incomplete\)$/.test(lostAfter.filename),
+       'capture notice: the recording stays marked incomplete in its name and record');
+    eq(await window.dismissCaptureWarning(saving), false, 'capture notice: a recording that is not saved yet is left as it is');
+    ok(!!(await row(saving)).captureError, 'capture notice: its failure is still there for the save to use');
 }
 
 await clearAll();
