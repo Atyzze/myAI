@@ -264,11 +264,13 @@ export function createReplyStreamReader() {
             events.push({ type: 'error', message: String(obj.error) });
             return;
         }
-        // A thinking model streams its reasoning in its own field before the answer. Counting it
-        // is what lets the view say the model is still at work rather than show nothing for minutes.
+        // A thinking model streams its reasoning in its own field before the answer. Each piece is
+        // passed on with its text, so the view can show the reasoning as it comes (folded away when
+        // the reader wants) rather than only say that the model is still at work. It never becomes
+        // part of the reply text.
         if (obj.thinking && !firstTokenSeen) {
             thinkingCount += 1;
-            events.push({ type: 'thinking', count: thinkingCount });
+            events.push({ type: 'thinking', count: thinkingCount, text: String(obj.thinking) });
         }
         if (obj.response) {
             if (!firstTokenSeen) {

@@ -684,6 +684,52 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     thinker.handle({ type: 'token', token: 'Yes', count: 1, elapsedMs: 0 });
     ok(thinkStatus.textContent === '⚡ Streaming - qwen3:8b', 'its first word moves it on to streaming');
 
+    // The reasoning itself is shown, above the answer, in a block that folds away with a tap.
+    const thinkDoc = {};
+    thinkDoc.createElement = tag => new PopupNode(thinkDoc, tag);
+    thinkDoc.createTextNode = text => new PopupNode(thinkDoc, '#text', text);
+    const shownReply = thinkDoc.createElement('div'), shownText = thinkDoc.createElement('span');
+    const shownCursor = thinkDoc.createElement('span');
+    shownReply.appendChild(shownText);
+    shownReply.appendChild(shownCursor);
+    const shower = render.createReplyRenderer({
+        replyEl: shownReply, textEl: shownText, cursorEl: shownCursor,
+        statusEl: thinkDoc.createElement('div'), footerEl: thinkDoc.createElement('div'), frame: fn => fn()
+    });
+    ok(!shownReply.children.some(child => child.className === render.REPLY_THINKING_CLASS),
+       'a reply with no reasoning shows no thinking block');
+    shower.handle({ type: 'thinking', count: 1, text: '\nLet me' });
+    shower.handle({ type: 'thinking', count: 2, text: ' see.' });
+    const block = shownReply.children[0];
+    const [summary, reasoning] = block ? block.children : [];
+    ok(block && block.tagName === 'DETAILS' && block.className === render.REPLY_THINKING_CLASS
+       && summary && summary.tagName === 'SUMMARY',
+       'the reasoning is shown as it comes, in a block that folds away, above the answer');
+    ok(block.open === true, 'the reasoning block starts open, so the thinking is seen rather than hidden');
+    ok(reasoning && reasoning.textContent === 'Let me see.',
+       `the block holds the reasoning as it came, without its opening line break (${reasoning && reasoning.textContent})`);
+    ok(summary.textContent === '🤔 Thinking · 2 tok', `the block says the model is thinking (${summary.textContent})`);
+    ok(shownText.textContent === '', 'the reasoning is never part of the answer text');
+    shower.handle({ type: 'token', token: 'Yes', count: 1, elapsedMs: 0 });
+    ok(shownText.textContent === 'Yes' && reasoning.textContent === 'Let me see.' && summary.textContent === '🤔 Thought · 2 tok',
+       'once the answer begins, the reasoning stays to read and is labelled as thought');
+    shower.handle({ type: 'reset' });
+    ok(!shownReply.children.some(child => child.className === render.REPLY_THINKING_CLASS),
+       'a re-initialised stream clears the previous reasoning');
+
+    // A view opened while the model reasons, or after, is shown the reasoning so far.
+    const replayGen = live.replyStreamInit(906);
+    live.replyStreamThinking(906, 1, replayGen, 'Hmm, ');
+    live.replyStreamThinking(906, 2, replayGen, 'the budget.');
+    live.replyStreamAppend(906, 'Answer', replayGen);
+    const replayed = [];
+    const stopReplay = live.subscribeReplyStream(906, msg => replayed.push(msg));
+    stopReplay();
+    const replayedThinking = replayed.find(msg => msg.type === 'thinking');
+    ok(replayedThinking && replayedThinking.text === 'Hmm, the budget.' && replayedThinking.count === 2
+       && replayed.indexOf(replayedThinking) < replayed.findIndex(msg => msg.type === 'token'),
+       `a view opened later is shown the reasoning so far, before the answer (${JSON.stringify(replayed)})`);
+
     renderer.handle({ type: 'reset' });
     ok(textEl.textContent === '' && cursorEl.style.display === '',
        'a re-initialised stream clears the previous answer instead of appending to it');

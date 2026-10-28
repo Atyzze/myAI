@@ -657,6 +657,10 @@ function zipEntries(bytes) {
        `reply thinking: a model that reasons first says so once, before its first word (${thought.progress.join(' | ')})`);
     ok(thought.stored[0] && thought.stored[0].text === 'Fine.' && !thought.stored[0].end,
        'reply thinking: the reasoning is not stored as the reply, and the reply is whole');
+    let watchedThinking = null;
+    live.subscribeReplyStream(thought.id, msg => { if (msg.type === 'thinking') watchedThinking = msg; })();
+    ok(watchedThinking && watchedThinking.text === 'Let me see.',
+       `reply thinking: the reasoning reaches the reply view to be read (${JSON.stringify(watchedThinking)})`);
     await gui.renderList({ force: true });
     await settle();
     ok(/Fine\./.test(rowHtml(thought.id)) && !/reply-mark/.test(rowHtml(thought.id)), 'reply end: a whole reply carries no mark');

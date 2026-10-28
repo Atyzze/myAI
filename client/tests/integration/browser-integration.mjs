@@ -873,6 +873,9 @@ try {
         const speed = doc.querySelector('.as-speed');
         const before = { scripts: doc.scripts.length, speedLabel: speed.textContent, pressed: play.getAttribute('aria-pressed'),
                          max: reply.scrollHeight - reply.clientHeight };
+        reply.scrollTop = reply.scrollHeight;
+        const clearance = Math.round(doc.querySelector('.as-bar').getBoundingClientRect().top
+                                     - doc.getElementById('text').getBoundingClientRect().bottom);
         speed.click();
         const popupShown = !doc.querySelector('.as-pop').hidden;
         doc.querySelector('.as-slower').click();
@@ -885,7 +888,7 @@ try {
         play.click();
         const pausedAt = reply.scrollTop;
         await new Promise(r => setTimeout(r, 500));
-        return { before, popupShown, slowerLabel, startedAt, moved, pausedAt, afterPause: reply.scrollTop,
+        return { before, clearance, popupShown, slowerLabel, startedAt, moved, pausedAt, afterPause: reply.scrollTop,
                  pressedAfter: play.getAttribute('aria-pressed'), stored: localStorage.getItem('myai-autoscroll-speed') };
     })()`, { userGesture: true });
     ok(savedPopup.before.scripts === 0, `the popup page still has no script of its own (${savedPopup.before.scripts})`);
@@ -895,6 +898,8 @@ try {
        `the speed button opens its popup, and - slows down (${savedPopup.popupShown}, ${savedPopup.slowerLabel})`);
     ok(savedPopup.before.max > 0 && savedPopup.startedAt === 0,
        `a text opened at its end starts again from the top (${savedPopup.startedAt}, can scroll ${savedPopup.before.max})`);
+    ok(savedPopup.clearance >= 8,
+       `scrolled to the end, the last line sits above the controls instead of under them (${savedPopup.clearance} px clear)`);
     ok(savedPopup.moved > 20, `▶ scrolls the text in the popup by itself (${savedPopup.moved} px in 1.5 s)`);
     ok(savedPopup.afterPause === savedPopup.pausedAt && savedPopup.pressedAfter === 'false',
        `pressing it again pauses (${savedPopup.pausedAt} then ${savedPopup.afterPause})`);

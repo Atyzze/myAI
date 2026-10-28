@@ -8,11 +8,17 @@
 // the end of the text it stops by itself. ▶ at the end starts again from the top.
 
 import { AUTOSCROLL_SPEED_KEY, SPEED_MIN, SPEED_MAX, clampSpeed, stepSpeed, lineHeightPx,
-         pxPerSecond, describeSpeed, startPosition, nextScroll } from './autoscroll-core.js';
+         pxPerSecond, describeSpeed, startPosition, nextScroll, END_SLACK_PX } from './autoscroll-core.js';
 import { readStored, writeStored } from './config.js';
 
 const STYLE_ID = 'myai-autoscroll-style';
 const FRAME_FALLBACK_MS = 100;
+
+// The controls float over the bottom right of the text. The text gets that much room after its end,
+// and this much more, so its last lines scroll up clear of them instead of always sitting under them.
+export const CONTROLS_ROOM_GAP_PX = 12;
+// The room when the page cannot say where the controls are (no layout yet): their height and offset.
+export const CONTROLS_ROOM_FALLBACK_PX = 72;
 
 const STYLES = `
 .as-bar{position:absolute;right:14px;bottom:var(--as-bottom,14px);z-index:20;display:flex;gap:6px;align-items:center;
@@ -170,6 +176,32 @@ export function attachAutoScroll({ doc, win = null, scroller, textEl = null, hos
     appendAll(bar, play, speedBtn, pop);
     host.appendChild(bar);
 
+    // Room under the text for the controls, on top of the padding the text already has; given back
+    // when the controls go.
+    const scrollerStyle = scroller.style || null;
+    const paddingBefore = scrollerStyle ? (scrollerStyle.paddingBottom || '') : '';
+    let basePadding = 0;
+    try { basePadding = parseFloat(view.getComputedStyle(scroller).paddingBottom) || 0; } catch (_) {}
+    function controlsRoom() {
+        try {
+            const box = scroller.getBoundingClientRect();
+            const controls = bar.getBoundingClientRect();
+            if (box.height > 0 && controls.height > 0) {
+                return Math.max(0, Math.round(box.bottom - controls.top)) + CONTROLS_ROOM_GAP_PX;
+            }
+        } catch (_) {}
+        return CONTROLS_ROOM_FALLBACK_PX;
+    }
+    // A text that was showing its end keeps showing it, now with its last lines clear of the controls,
+    // so ▶ there still starts again from the top.
+    function makeRoom() {
+        if (!scrollerStyle) return;
+        const wasAtEnd = maxScroll() - (Number(scroller.scrollTop) || 0) <= END_SLACK_PX;
+        try { scrollerStyle.paddingBottom = `${Math.round(basePadding + controlsRoom())}px`; } catch (_) {}
+        if (wasAtEnd) { try { scroller.scrollTop = maxScroll(); } catch (_) {} }
+    }
+    makeRoom();
+
     function paintSpeed() {
         range.value = String(speed);
         value.textContent = describeSpeed(speed);
@@ -276,6 +308,8 @@ export function attachAutoScroll({ doc, win = null, scroller, textEl = null, hos
         if (bar.contains(event.target)) return;
         holding = true;
     });
+    // The footer or the window can change size; the room follows where the controls now are.
+    if (typeof view.addEventListener === 'function') on(view, 'resize', makeRoom);
     const release = () => { holding = false; };
     on(doc, 'pointerup', release, true);
     on(doc, 'pointercancel', release, true);
@@ -288,6 +322,7 @@ export function attachAutoScroll({ doc, win = null, scroller, textEl = null, hos
         running = false;
         for (const off of listeners.splice(0)) { try { off(); } catch (_) {} }
         try { bar.remove(); } catch (_) {}
+        try { if (scrollerStyle) scrollerStyle.paddingBottom = paddingBefore; } catch (_) {}
         try { restorePosition?.(); } catch (_) {}
     };
 }
