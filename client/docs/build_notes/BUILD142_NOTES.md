@@ -22,4 +22,4 @@ Two small changes to reading a reply. A thinking model's reasoning was only coun
 
 Three new mutation guards: reasoning passed on without its text, the reasoning block starting folded, and a later view not replayed the reasoning.
 
-GATE_RESULT
+22 suites passed (strict gate) in 11 min 17 s; slowest mutation-guards (6 min 18 s)
