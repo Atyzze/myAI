@@ -2094,6 +2094,27 @@
       ]
     },
     {
+      "id": "REPLY-THINKING-SHOWN-001",
+      "title": "A thinking model's reasoning is shown above its answer as it comes, in a block that starts open and folds away or opens again with a tap, in the page and in a pop-up; a view opened later is shown the reasoning so far, and the reasoning is never part of the reply",
+      "suites": [
+        "pure",
+        "live-view-unit",
+        "app-behaviour"
+      ],
+      "mutationGuards": [
+        "MUT-THINKING-TEXT-DROPPED",
+        "MUT-THINKING-BLOCK-CLOSED",
+        "MUT-THINKING-NOT-REPLAYED"
+      ]
+    },
+    {
+      "id": "AUTOSCROLL-CONTROLS-ROOM-001",
+      "title": "An opened text with auto-scroll controls has room after its end for them, so scrolled to the bottom its last line sits above the controls instead of under them, and a text opened at its end still starts again from the top",
+      "suites": [
+        "browser-lifecycle"
+      ]
+    },
+    {
       "id": "CAPTURE-NOTICE-DISMISS-001",
       "title": "The notice on a recording that stopped on a capture failure has a ✕ that removes it from the stored recording, so it stays gone after the app is opened again; the audio and the recording's incomplete mark stay, and a recording still being saved keeps its failure",
       "suites": [

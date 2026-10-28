@@ -476,7 +476,7 @@ export async function runSummary(recId, progressCallback, dropTId) {
             for (const event of events) {
                 if (event.type === 'error') throw new Error(`Reply server: ${event.message}`);
                 if (event.type === 'thinking') {
-                    replyStreamThinking(recId, event.count, streamGen);
+                    replyStreamThinking(recId, event.count, streamGen, event.text);
                     if (!thinkingSeen) { thinkingSeen = true; progressCallback('__thinking__'); }
                 }
                 else if (event.type === 'first-token') progressCallback('__first_token__');

@@ -141,7 +141,8 @@ const _replyStreamOrder = [];
 
 export function replyStreamInit(recId)   {
   return resetEntry(_replyStreams, _replyStreamOrder, recId,
-                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', thinking: 0, done: false, end: null })
+                    { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', thinking: 0, thinkingText: '',
+                      done: false, end: null })
          .generation;
 }
 
@@ -167,13 +168,16 @@ export function replyStreamAppend(recId, token, generation = null) {
   entry.listeners.forEach(fn => fn({ type: 'token', token, ...stats }));
 }
 
-// The model is still reasoning before its answer: count goes up with each piece of thinking.
-export function replyStreamThinking(recId, count, generation = null) {
+// The model is still reasoning before its answer: count goes up with each piece of thinking, and
+// text is that piece, kept so a view opened later shows the reasoning so far.
+export function replyStreamThinking(recId, count, generation = null, text = '') {
   if (!_replyStreams[recId]) replyStreamInit(recId);
   const entry = _replyStreams[recId];
   if (!ownsEntry(entry, generation)) return;
+  const piece = String(text || '');
   entry.thinking = Math.max(0, Number(count) || 0);
-  entry.listeners.forEach(fn => fn({ type: 'thinking', count: entry.thinking }));
+  entry.thinkingText += piece;
+  entry.listeners.forEach(fn => fn({ type: 'thinking', count: entry.thinking, text: piece }));
 }
 
 // end says how the reply ended ({ state, reason }: complete, cutoff, interrupted, error, stopped),
@@ -195,7 +199,7 @@ function normalEnd(end) {
 function replyStreamSnapshot(entry) {
   const messages = [];
   if (entry.model) messages.push({ type: 'model', model: entry.model });
-  if (entry.thinking && !entry.tokens) messages.push({ type: 'thinking', count: entry.thinking });
+  if (entry.thinking) messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '' });
   if (entry.tokens) {
     messages.push({
       type: 'token',
@@ -246,7 +250,10 @@ function buildReplyStreamHtml(recLabel) {
     styles: `
   #reply{flex:1;overflow-y:auto;padding:24px 28px;white-space:pre-wrap;word-break:break-word;line-height:1.8}
   #cursor{display:inline-block;width:2px;height:1em;background:${VIEW_ACCENT.replystream};vertical-align:text-bottom;animation:blink .7s step-end infinite}
-  @keyframes blink{50%{opacity:0}}`,
+  @keyframes blink{50%{opacity:0}}
+  .reply-thinking{display:block;margin:0 0 14px;padding:6px 12px;border-left:2px solid #3a3a3a;background:#141414;border-radius:6px}
+  .reply-thinking-summary{cursor:pointer;font:12px/1.6 monospace;color:${LIVE_VIEW_COLORS.status};user-select:none}
+  .reply-thinking-text{margin-top:4px;font-size:13.5px;line-height:1.7;color:#9c9c9c}`,
     body: `<div id="reply"><span id="text"></span><span id="cursor"></span></div>`
   });
 }

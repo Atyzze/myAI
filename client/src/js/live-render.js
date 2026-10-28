@@ -213,9 +213,45 @@ export function replyEndLabel(state, reason = '') {
     return '✅ Complete';
 }
 
+// The reasoning of a thinking model, shown above the answer as it comes. It is a <details> block, so
+// it folds away and opens again with a tap and no script, in a pop-up as in the page. It starts open:
+// the reasoning is worth watching while the model works, and a tap hides it for the rest of the view.
+export const REPLY_THINKING_CLASS = 'reply-thinking';
+
+function thinkingSummaryText(count, answering) {
+    const tokens = count ? ` · ${count} tok` : '';
+    return answering ? `🤔 Thought${tokens}` : `🤔 Thinking${tokens}`;
+}
+
+function createThinkingBlock(textEl) {
+    const parent = textEl && textEl.parentNode;
+    const doc = (textEl && textEl.ownerDocument) || (typeof document !== 'undefined' ? document : null);
+    if (!parent || !doc || typeof doc.createElement !== 'function' || typeof parent.insertBefore !== 'function') return null;
+    try {
+        const block = doc.createElement('details');
+        block.className = REPLY_THINKING_CLASS;
+        block.open = true;
+        if (typeof block.setAttribute === 'function') block.setAttribute('open', '');
+        const summary = doc.createElement('summary');
+        summary.className = `${REPLY_THINKING_CLASS}-summary`;
+        summary.title = 'Tap to hide or show the reasoning';
+        const body = doc.createElement('div');
+        body.className = `${REPLY_THINKING_CLASS}-text`;
+        block.appendChild(summary);
+        block.appendChild(body);
+        parent.insertBefore(block, textEl);
+        return { block, summary, body };
+    } catch (_) {
+        return null;
+    }
+}
+
 export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, footerEl, frame = null }) {
     let charCount = 0;
     let thinkingCount = 0;
+    let thinking = null;
+    let gatheredThinking = '';
+    let thinkingShown = 0;
     let tokenCount = 0;
     let elapsedMs = 0;
     let model = '';
@@ -257,11 +293,40 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
 
     function writeGatheredTokens() {
         writeScheduled = false;
+        writeGatheredThinking();
         if (!gatheredTokens) return;
         const follow = atBottom(replyEl);
         appendToGrowingTextNode(gatheredTokens);
         gatheredTokens = '';
         setText(footerEl, progressLine());
+        stickToBottom(replyEl, follow);
+    }
+
+    function paintThinkingSummary() {
+        if (thinking) setText(thinking.summary, thinkingSummaryText(thinkingCount, charCount > 0));
+    }
+
+    function writeGatheredThinking() {
+        if (!gatheredThinking) return;
+        if (!thinking) thinking = createThinkingBlock(textEl);
+        if (!thinking) { gatheredThinking = ''; return; }
+        const follow = atBottom(replyEl);
+        // The reasoning usually opens with a line break; it is not shown as an empty first line.
+        const piece = thinkingShown ? gatheredThinking : gatheredThinking.replace(/^\s+/, '');
+        gatheredThinking = '';
+        if (piece) {
+            const doc = thinking.body.ownerDocument || (typeof document !== 'undefined' ? document : null);
+            const last = thinking.body.lastChild;
+            if (last && last.nodeType === 3 && typeof last.appendData === 'function' && last.length < REPLY_TEXT_NODE_MAX_CHARS) {
+                last.appendData(piece);
+            } else if (doc && typeof doc.createTextNode === 'function') {
+                thinking.body.appendChild(doc.createTextNode(piece));
+            } else {
+                thinking.body.textContent = `${thinking.body.textContent || ''}${piece}`;
+            }
+            thinkingShown += piece.length;
+        }
+        paintThinkingSummary();
         stickToBottom(replyEl, follow);
     }
 
@@ -279,7 +344,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 const wasEmpty = charCount === 0;
                 gatheredTokens += token;
                 charCount += token.length;
-                if (wasEmpty && token.length) setText(statusEl, streamingLabel());
+                if (wasEmpty && token.length) { setText(statusEl, streamingLabel()); paintThinkingSummary(); }
                 if (Number.isFinite(msg.count))     tokenCount = msg.count;
                 if (Number.isFinite(msg.elapsedMs)) elapsedMs  = msg.elapsedMs;
                 writeGatheredTokensOnNextFrame();
@@ -288,6 +353,13 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 if (!charCount) {
                     setText(statusEl, thinkingLabel());
                     setText(footerEl, `${thinkingCount} thinking tok`);
+                }
+                const piece = String(msg.text ?? '');
+                if (piece) {
+                    gatheredThinking += piece;
+                    writeGatheredTokensOnNextFrame();
+                } else {
+                    paintThinkingSummary();
                 }
             } else if (msg.type === 'model') {
                 model = String(msg.model ?? '');
@@ -300,6 +372,9 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
             } else if (msg.type === 'reset') {
                 generation++;
                 gatheredTokens = '';
+                gatheredThinking = '';
+                thinkingShown = 0;
+                if (thinking) { try { thinking.block.remove(); } catch (_) {} thinking = null; }
                 writeScheduled = false;
                 textEl.textContent = '';
                 charCount = 0;

@@ -3443,6 +3443,7 @@ await testStitch();
         const a = r.push(line({ thinking: 'Let', response: '' }) + line({ thinking: ' me see', response: '' }));
         eq(drain(a), 'thinking,thinking', 'reply stream: reasoning before the answer is reported as thinking');
         eq(a.map(e => e.count).join(','), '1,2', 'reply stream: and counted, so the view can show the model is at work');
+        eq(a.map(e => e.text).join(''), 'Let me see', 'reply stream: each piece of reasoning carries its text, so the view can show it');
         eq(r.text, '', 'reply stream: reasoning is never part of the reply text');
         eq(drain(r.push(line({ response: 'Yes' }) + line({ thinking: 'late', response: '' }))), 'first-token,token',
            'reply stream: once the answer has begun, thinking is not reported again');

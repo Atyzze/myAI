@@ -154,8 +154,8 @@ export const mutations = [
     {
         id: 'MUT-STREAM-REINIT-REPLACE',
         file: 'src/js/live-tabs.js',
-        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, done: false, end: null })\n         .generation;',
-        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, done: false, end: null, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
+        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\',\n                      done: false, end: null })\n         .generation;',
+        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\', done: false, end: null, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /tokens still reach a popup opened before the stream was re-initialised/
     },
@@ -3805,6 +3805,30 @@ export const mutations = [
         to: '        if (false) {',
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /reasoning before the answer is reported as thinking/
+    },
+    {
+        id: 'MUT-THINKING-TEXT-DROPPED',
+        file: 'src/js/reply-core.js',
+        from: "events.push({ type: 'thinking', count: thinkingCount, text: String(obj.thinking) });",
+        to: "events.push({ type: 'thinking', count: thinkingCount });",
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /each piece of reasoning carries its text/
+    },
+    {
+        id: 'MUT-THINKING-BLOCK-CLOSED',
+        file: 'src/js/live-render.js',
+        from: "        block.open = true;\n        if (typeof block.setAttribute === 'function') block.setAttribute('open', '');",
+        to: '',
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /the reasoning block starts open/
+    },
+    {
+        id: 'MUT-THINKING-NOT-REPLAYED',
+        file: 'src/js/live-tabs.js',
+        from: "  if (entry.thinking) messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '' });",
+        to: "  if (entry.thinking && !entry.tokens) messages.push({ type: 'thinking', count: entry.thinking });",
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /a view opened later is shown the reasoning so far/
     },
     {
         id: 'MUT-CAPTURE-DISMISS-NOT-STORED',
