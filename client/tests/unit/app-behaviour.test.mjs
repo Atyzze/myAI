@@ -657,6 +657,8 @@ function zipEntries(bytes) {
        `reply thinking: a model that reasons first says so once, before its first word (${thought.progress.join(' | ')})`);
     ok(thought.stored[0] && thought.stored[0].text === 'Fine.' && !thought.stored[0].end,
        'reply thinking: the reasoning is not stored as the reply, and the reply is whole');
+    ok(thought.stored[0] && thought.stored[0].thinking === 'Let me see.' && thought.stored[0].thinkingTokens === 2,
+       `reply thinking: the reasoning is kept with the reply it led to, with how long it was (${JSON.stringify(thought.stored[0])})`);
     let watchedThinking = null;
     live.subscribeReplyStream(thought.id, msg => { if (msg.type === 'thinking') watchedThinking = msg; })();
     ok(watchedThinking && watchedThinking.text === 'Let me see.',
@@ -704,6 +706,21 @@ function zipEntries(bytes) {
        'capture notice: the recording stays marked incomplete in its name and record');
     eq(await window.dismissCaptureWarning(saving), false, 'capture notice: a recording that is not saved yet is left as it is');
     ok(!!(await row(saving)).captureError, 'capture notice: its failure is still there for the save to use');
+}
+
+// A setting with two values is an on/off switch that stores exactly what its dropdown stored.
+{
+    const wavSwitch = { tagName: 'INPUT', type: 'checkbox', checked: false,
+                        getAttribute: name => ({ 'data-on': 'wav', 'data-off': 'opus' })[name] ?? null };
+    settings.showControlValue(wavSwitch, 'wav');
+    ok(wavSwitch.checked === true && settings.controlValue(wavSwitch) === 'wav',
+       'settings switch: a switch shows a stored value as on, and stores it back as that value, not as true');
+    settings.showControlValue(wavSwitch, 'opus');
+    ok(wavSwitch.checked === false && settings.controlValue(wavSwitch) === 'opus',
+       'settings switch: and off as the other value');
+    const dropdown = { tagName: 'SELECT', value: '32', getAttribute: () => null };
+    settings.showControlValue(dropdown, '48');
+    ok(settings.controlValue(dropdown) === '48', 'settings switch: a dropdown is read and set as before');
 }
 
 // A recording recovered after the app was closed under it says when that happened; ✕ removes the note.

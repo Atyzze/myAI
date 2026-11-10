@@ -41,6 +41,35 @@ const ELEMENT_KEYS = [
     'set-translate-panels'
 ];
 
+// A setting with two values is shown as an on/off switch (Build 144): a checkbox whose data-on and
+// data-off say which stored value each position stands for. Every setting is still stored and read
+// as before, so nothing that reads one changes, and a switch is read and set only through these.
+function isSwitch(el) {
+    return !!el && el.tagName === 'INPUT' && String(el.type).toLowerCase() === 'checkbox';
+}
+
+export function controlValue(el) {
+    if (!isSwitch(el)) return el.value;
+    return el.checked ? el.getAttribute('data-on') : el.getAttribute('data-off');
+}
+
+export function showControlValue(el, value) {
+    if (isSwitch(el)) el.checked = String(value) === el.getAttribute('data-on');
+    else el.value = value;
+}
+
+// A row marked data-shown-when="set-x=value" only matters while that setting has that value (the
+// reply after an automatic transcription, the Opus quality, the speakers' names and count), so it is
+// hidden otherwise. Its setting keeps its value and is still used whenever it applies.
+function paintDependentRows() {
+    if (typeof document.querySelectorAll !== 'function') return;
+    for (const row of document.querySelectorAll('#settingsPanel [data-shown-when]')) {
+        const [key, wanted] = String(row.getAttribute('data-shown-when') || '').split('=');
+        const control = document.getElementById(key);
+        row.hidden = !!control && controlValue(control) !== wanted;
+    }
+}
+
 function populateRetentionSelects() {
     const markup = RETENTION_OPTIONS
         .map(option => `<option value="${escapeAttr(option.value)}">${escapeHtml(option.label)}</option>`)
@@ -75,8 +104,9 @@ export function openSettings() {
     _editedHere.clear();
     ELEMENT_KEYS.forEach(k => {
         const el = document.getElementById(k);
-        if (el) el.value = getSetting(k);
+        if (el) showControlValue(el, getSetting(k));
     });
+    paintDependentRows();
     labelAutoWaveform();
     const overlay = document.getElementById('settingsOverlay');
     overlay.classList.add('open');
@@ -106,7 +136,7 @@ async function paintBoxCapabilities() {
 function persistControl(key) {
     const el = document.getElementById(key);
     if (!el) return;
-    const value = el.value;
+    const value = controlValue(el);
     if (value === '' && el.tagName === 'SELECT' && (readStored(key) || '') !== '') return;
     writeStored(key, value);
 }
@@ -150,10 +180,11 @@ export function wireSettingsPersistence() {
             }
             if (k === 'set-compact-mode') { applyCompactMode(); _renderList(); }
             if (k === 'set-waveform-fps') applyWaveformRate();
-            if (k === 'set-speaker-detection' && el.value === 'on' && !confirmSpeakerDetection()) {
-                el.value = 'off';
+            if (k === 'set-speaker-detection' && controlValue(el) === 'on' && !confirmSpeakerDetection()) {
+                showControlValue(el, 'off');
                 persistControl(k);
             }
+            paintDependentRows();
         });
     });
 
@@ -975,7 +1006,9 @@ async function viewSummaryById(recId, sId) {
         model:      item.model,
         tokenCount: item.tokenCount,
         elapsedMs:  item.elapsedMs,
-        end:        item.end || null
+        end:        item.end || null,
+        thinking:   item.thinking || '',
+        thinkingTokens: item.thinkingTokens || 0
     });
 }
 

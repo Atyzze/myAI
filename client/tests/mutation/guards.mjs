@@ -3990,4 +3990,36 @@ export const mutations = [
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /keeps an error's name, message and where it was thrown/
     },
+    {
+        id: 'MUT-REASONING-NOT-STORED',
+        file: 'src/js/reply.js',
+        from: "                ...(storedThinking ? { thinking: storedThinking, thinkingTokens } : {})",
+        to: "                ...({})",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the reasoning is kept with the reply it led to/
+    },
+    {
+        id: 'MUT-SAVED-REASONING-OPEN',
+        file: 'src/js/live-render.js',
+        from: '                if (msg.folded) thinkingFolded = true;\n',
+        to: '',
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /reasoning replayed for a saved reply starts folded/
+    },
+    {
+        id: 'MUT-SAVED-REASONING-DROPPED',
+        file: 'src/js/live-tabs.js',
+        from: '    thinkingText: reasoning,\n',
+        to: "    thinkingText: '',\n",
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /a saved reply opens with the reasoning that led to it, folded/
+    },
+    {
+        id: 'MUT-SWITCH-STORES-CHECKBOX-VALUE',
+        file: 'src/js/settings.js',
+        from: '    if (!isSwitch(el)) return el.value;\n',
+        to: '    return el.value;\n',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a switch shows a stored value as on, and stores it back as that value/
+    },
 ];

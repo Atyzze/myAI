@@ -265,6 +265,14 @@ ok(/if \(!on\) document\.dispatchEvent\(new CustomEvent\(WAVEFORM_HIDDEN_EVENT\)
    && /document\.addEventListener\(WAVEFORM_HIDDEN_EVENT, \(\) => \{\n\s*if \(showingFs \|\| browserFs\(\)\) leaveFullscreen\(\);/.test(mainSource),
    'when the waveform is hidden (the recording stops, capture fails or the waveform is turned off) its fullscreen view is left too, so the page is not left locked with its controls hidden');
 
+const settingKeys = [...(settingsSource.match(/const ELEMENT_KEYS = \[([\s\S]*?)\];/)?.[1] || '').matchAll(/'([^']+)'/g)].map(m => m[1]);
+const configDefaults = read('src/js/config.js');
+const switchRows = [...index.matchAll(/<input type="checkbox" role="switch" class="settings-switch" id="([^"]+)" data-on="([^"]+)" data-off="([^"]+)">/g)]
+    .map(m => ({ id: m[1], on: m[2], off: m[3], fallback: configDefaults.match(new RegExp(`'${m[1]}':\\s+'([^']*)'`))?.[1] }));
+ok(settingKeys.length === 17 && settingKeys.every(key => (index.match(new RegExp(`id="${key}"`, 'g')) || []).length === 1),
+   `every setting Settings stores still has exactly one control in the panel (${settingKeys.length})`);
+ok(switchRows.length === 7 && switchRows.every(row => settingKeys.includes(row.id) && [row.on, row.off].includes(row.fallback)),
+   `each switch stands for a setting and its default is one of its two positions (${JSON.stringify(switchRows)})`);
 const persist = blockAt(settingsSource, /function persistControl\(/);
 ok(/tagName === 'SELECT'/.test(persist),
    'only a dropdown refuses to store an empty value; a text box the guide says can be emptied really can be');
@@ -547,7 +555,7 @@ ok(/AppState\._vizFps = waveformFps\(getSetting\('set-waveform-fps'\)\);/.test(r
    && waveOptions === '0,10,15,30,60,auto' && /<option value="30">[^<]*\(default\)/.test(index),
    `the waveform's frame rate is a setting: off, 10, 15, 30 (the default), 60 frames a second or auto (${waveOptions})`);
 ok(/function labelAutoWaveform\(\) \{[\s\S]*?measureScreenRefresh\(\)[\s\S]*?describeAutoWaveform\(hz\)/.test(settingsSource)
-   && /el\.value = getSetting\(k\);\n\s*\}\);\n\s*labelAutoWaveform\(\);/.test(settingsSource),
+   && /showControlValue\(el, getSetting\(k\)\);\n\s*\}\);\n\s*paintDependentRows\(\);\n\s*labelAutoWaveform\(\);/.test(settingsSource),
    'when Settings opens, Auto is labelled with the refresh rate measured from this screen');
 ok(/if \(k === 'set-waveform-fps'\) applyWaveformRate\(\);/.test(settingsSource)
    && /applyCompactMode\(\);\s*applyWaveformRate\(\);/.test(settingsSource),

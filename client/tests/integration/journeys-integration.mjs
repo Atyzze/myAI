@@ -1100,6 +1100,68 @@ try {
     ok(logsClosed, 'Escape closes the system log');
     await app.evaluate(`window.closeHelp(); true`);
 
+    journey('Settings: every setting with two values is an on/off switch that stores what its dropdown stored, '
+        + 'and a setting that only applies while another is on is shown only then');
+    const switches = await app.evaluate(`(async () => {
+        const keys = ['set-auto-transcribe', 'set-auto-reply', 'set-recording-format', 'set-speaker-detection', 'set-speaker-policy'];
+        const before = Object.fromEntries(keys.map(key => [key, localStorage.getItem(key)]));
+        localStorage.setItem('set-auto-transcribe', 'off');
+        localStorage.setItem('set-recording-format', 'opus');
+        localStorage.setItem('set-speaker-detection', 'on');
+        localStorage.setItem('set-speaker-policy', 'numbers');
+        document.getElementById('settingsBtn').click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const panel = document.getElementById('settingsPanel');
+        const shown = id => !document.getElementById(id).closest('.settings-row').hidden;
+        const flip = async id => {
+            document.getElementById(id).click();
+            await new Promise(resolve => setTimeout(resolve, 50));
+        };
+        const twoValueSelects = [...panel.querySelectorAll('select')].filter(sel => sel.options.length === 2).map(sel => sel.id);
+        const switchIds = [...panel.querySelectorAll('input.settings-switch[role="switch"]')].map(el => el.id);
+        const replyHiddenWhenOff = !shown('set-auto-reply');
+        await flip('set-auto-transcribe');
+        const afterOn = { stored: localStorage.getItem('set-auto-transcribe'), replyShown: shown('set-auto-reply') };
+        await flip('set-auto-transcribe');
+        const afterOff = { stored: localStorage.getItem('set-auto-transcribe'), replyShown: shown('set-auto-reply') };
+        const opusShown = shown('set-opus-bitrate');
+        await flip('set-recording-format');
+        const wav = { stored: localStorage.getItem('set-recording-format'), opusShown: shown('set-opus-bitrate') };
+        const namingShown = shown('set-speaker-policy') && shown('set-max-speakers');
+        await flip('set-speaker-policy');
+        const policy = localStorage.getItem('set-speaker-policy');
+        document.getElementById('settingsX').click();
+        await new Promise(resolve => setTimeout(resolve, 200));
+        document.getElementById('settingsBtn').click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const reopened = { wav: document.getElementById('set-recording-format').checked,
+                           infer: document.getElementById('set-speaker-policy').checked,
+                           opusShown: shown('set-opus-bitrate') };
+        localStorage.setItem('set-speaker-detection', 'off');
+        document.getElementById('settingsX').click();
+        await new Promise(resolve => setTimeout(resolve, 200));
+        document.getElementById('settingsBtn').click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const namingHiddenWhenOff = !shown('set-speaker-policy') && !shown('set-max-speakers');
+        document.getElementById('settingsX').click();
+        for (const [key, value] of Object.entries(before)) {
+            if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value);
+        }
+        return { twoValueSelects, switchIds, replyHiddenWhenOff, afterOn, afterOff, opusShown, wav, namingShown, policy,
+                 reopened, namingHiddenWhenOff };
+    })()`, { userGesture: true });
+    ok(switches.twoValueSelects.length === 0 && switches.switchIds.length === 7,
+       `no setting is a dropdown of two values any more; seven are switches (${JSON.stringify(switches.switchIds)}, left: ${switches.twoValueSelects})`);
+    ok(switches.replyHiddenWhenOff && switches.afterOn.stored === 'on' && switches.afterOn.replyShown
+       && switches.afterOff.stored === 'off' && !switches.afterOff.replyShown,
+       `a switch stores on and off as its dropdown did, and auto-reply shows only while auto-transcribe is on (${JSON.stringify([switches.afterOn, switches.afterOff])})`);
+    ok(switches.opusShown && switches.wav.stored === 'wav' && !switches.wav.opusShown,
+       `recording uncompressed stores wav and hides the Opus quality, which then does not apply (${JSON.stringify(switches.wav)})`);
+    ok(switches.namingShown && switches.policy === 'infer' && switches.namingHiddenWhenOff,
+       `how speakers are named and how many are told apart show while speakers are labelled, and the naming switch stores infer (${switches.policy})`);
+    ok(switches.reopened.wav && switches.reopened.infer && !switches.reopened.opusShown,
+       `reopened, Settings shows each switch as it was stored (${JSON.stringify(switches.reopened)})`);
+
     journey('Silence is marked in the timestamped reading but never handed to the model as speech');
     const silentId = await app.evaluate(`(async () => {
         const { dbExec, commitAudio } = await import('/src/js/db.js');

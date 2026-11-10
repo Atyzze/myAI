@@ -214,8 +214,9 @@ export function replyEndLabel(state, reason = '') {
 }
 
 // The reasoning of a thinking model, shown above the answer as it comes. It is a <details> block, so
-// it folds away and opens again with a tap and no script, in a pop-up as in the page. It starts open:
-// the reasoning is worth watching while the model works, and a tap hides it for the rest of the view.
+// it folds away and opens again with a tap and no script, in a pop-up as in the page. While the model
+// works it starts open: the reasoning is worth watching then, and a tap hides it for the rest of the
+// view. A saved reply opened later starts with it folded (a thinking message with folded: true).
 export const REPLY_THINKING_CLASS = 'reply-thinking';
 
 function thinkingSummaryText(count, answering) {
@@ -223,15 +224,15 @@ function thinkingSummaryText(count, answering) {
     return answering ? `🤔 Thought${tokens}` : `🤔 Thinking${tokens}`;
 }
 
-function createThinkingBlock(textEl) {
+function createThinkingBlock(textEl, { folded = false } = {}) {
     const parent = textEl && textEl.parentNode;
     const doc = (textEl && textEl.ownerDocument) || (typeof document !== 'undefined' ? document : null);
     if (!parent || !doc || typeof doc.createElement !== 'function' || typeof parent.insertBefore !== 'function') return null;
     try {
         const block = doc.createElement('details');
         block.className = REPLY_THINKING_CLASS;
-        block.open = true;
-        if (typeof block.setAttribute === 'function') block.setAttribute('open', '');
+        block.open = !folded;
+        if (!folded && typeof block.setAttribute === 'function') block.setAttribute('open', '');
         const summary = doc.createElement('summary');
         summary.className = `${REPLY_THINKING_CLASS}-summary`;
         summary.title = 'Tap to hide or show the reasoning';
@@ -252,6 +253,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
     let thinking = null;
     let gatheredThinking = '';
     let thinkingShown = 0;
+    let thinkingFolded = false;
     let tokenCount = 0;
     let elapsedMs = 0;
     let model = '';
@@ -308,7 +310,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
 
     function writeGatheredThinking() {
         if (!gatheredThinking) return;
-        if (!thinking) thinking = createThinkingBlock(textEl);
+        if (!thinking) thinking = createThinkingBlock(textEl, { folded: thinkingFolded });
         if (!thinking) { gatheredThinking = ''; return; }
         const follow = atBottom(replyEl);
         // The reasoning usually opens with a line break; it is not shown as an empty first line.
@@ -350,6 +352,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 writeGatheredTokensOnNextFrame();
             } else if (msg.type === 'thinking') {
                 if (Number.isFinite(msg.count)) thinkingCount = msg.count;
+                if (msg.folded) thinkingFolded = true;
                 if (!charCount) {
                     setText(statusEl, thinkingLabel());
                     setText(footerEl, `${thinkingCount} thinking tok`);
@@ -374,6 +377,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 gatheredTokens = '';
                 gatheredThinking = '';
                 thinkingShown = 0;
+                thinkingFolded = false;
                 if (thinking) { try { thinking.block.remove(); } catch (_) {} thinking = null; }
                 writeScheduled = false;
                 textEl.textContent = '';

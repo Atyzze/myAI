@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="143">
+<meta name="myai-build" content="144">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -247,6 +247,19 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 .settings-refresh{border:1px solid #444;background:#0a0a0a;color:#ccc;border-radius:6px;width:38px;height:38px;font-size:15px;flex-shrink:0;display:flex;align-items:center;justify-content:center;padding:0}
 .settings-refresh:hover{background:#222;border-color:#888}
 .settings-hint{font-size:11px;color:#666;font-family:monospace;word-break:break-word}
+.settings-switch-line{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.settings-switch-line .settings-label{flex:1;cursor:pointer}
+.settings-switch{appearance:none;-webkit-appearance:none;flex:none;width:42px;height:24px;margin:0;border-radius:12px;background:#2a2a2a;border:1px solid #555;position:relative;cursor:pointer;transition:background .15s,border-color .15s}
+.settings-switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#999;transition:transform .15s,background .15s}
+.settings-switch:checked{background:#1f5f2a;border-color:#3d9a4c}
+.settings-switch:checked::after{transform:translateX(18px);background:#fff}
+.settings-switch:focus-visible{outline:2px solid #7aa7ff;outline-offset:2px}
+.settings-switch:disabled{opacity:.5;cursor:default}
+.settings-sub{margin-left:12px;padding-left:10px;border-left:2px solid #2a2a2a}
+.settings-row[hidden]{display:none}
+.settings-more>summary{font-size:11px;color:#777;font-family:monospace;cursor:pointer;width:max-content}
+.settings-more>summary:hover{color:#aaa}
+.settings-more .settings-hint{margin-top:4px}
 .box-capabilities-list{margin:4px 0;padding-left:18px}
 .box-capabilities-list .box-warning{color:#b26a00}
 .settings-warn{color:#e0a44d;border-left:3px solid #e0a44d;padding-left:8px;margin-top:6px}
@@ -506,26 +519,31 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
       <h2 id="settingsTitle">⚙️ Settings</h2>
       <button id="settingsX" class="settings-close" data-action="closeSettings" aria-label="Close settings">✕ Close</button>
     </div>
+    <div class="settings-section-label">Recording</div>
     <div class="settings-row">
-      <label class="settings-label" for="set-auto-transcribe">Auto-transcribe after recording</label>
-      <select class="settings-select" id="set-auto-transcribe">
-        <option value="off">Off</option>
-        <option value="on">On</option>
-      </select>
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-live-transcribe">Start recordings with live transcription on</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-live-transcribe" data-on="on" data-off="off">
+      </div>
+      <div class="settings-hint">Uploads audio to your transcription server from the moment you press record. 📝 turns it off and on during a recording.</div>
     </div>
     <div class="settings-row">
-      <label class="settings-label" for="set-auto-reply">Auto-reply after transcription</label>
-      <select class="settings-select" id="set-auto-reply">
-        <option value="off">Off</option>
-        <option value="on">On</option>
-      </select>
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-recording-format">Record uncompressed (WAV)</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-recording-format" data-on="wav" data-off="opus">
+      </div>
+      <div class="settings-hint">Off records Opus, about twenty-five times smaller for the same recording (the default). WAV is used automatically where the browser cannot record Opus. Existing recordings keep their format.</div>
     </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-compact-mode">Compact GUI</label>
-      <select class="settings-select" id="set-compact-mode">
-        <option value="on">On</option>
-        <option value="off">Off</option>
+    <div class="settings-row" data-shown-when="set-recording-format=opus">
+      <label class="settings-label" for="set-opus-bitrate">Opus quality</label>
+      <select class="settings-select" id="set-opus-bitrate">
+        <option value="24">24 kbps - longest sessions</option>
+        <option value="32">32 kbps (default)</option>
+        <option value="48">48 kbps</option>
+        <option value="64">64 kbps</option>
+        <option value="96">96 kbps - closest to uncompressed</option>
       </select>
+      <div class="settings-hint">32 kbps is about 14 MB an hour and transcribes as well as the browser default of about 55 MB an hour.</div>
     </div>
     <div class="settings-row">
       <label class="settings-label" for="set-waveform-fps">Recording waveform</label>
@@ -537,15 +555,36 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
         <option value="60">60 frames a second</option>
         <option value="auto">Auto - every refresh of this screen</option>
       </select>
-      <div class="settings-hint">The most times a second the waveform is redrawn during a recording. Fewer frames use less battery on a phone; the recording is the same either way. <strong>Auto</strong> follows the screen the app is on, whatever its refresh rate (60, 120, 144 Hz or more): the smoothest, and on a fast phone screen the most battery. A change applies at once, also to a recording in progress.</div>
+      <details class="settings-more"><summary>More</summary><div class="settings-hint">The most times a second the waveform is redrawn during a recording. Fewer frames use less battery on a phone; the recording is the same either way. <strong>Auto</strong> follows the screen the app is on, whatever its refresh rate (60, 120, 144 Hz or more): the smoothest, and on a fast phone screen the most battery. A change applies at once, also to a recording in progress.</div></details>
     </div>
     <div class="settings-row">
-      <label class="settings-label" for="set-recording-format">Recording format</label>
-      <select class="settings-select" id="set-recording-format">
-        <option value="opus">Opus compressed (default)</option>
-        <option value="wav">WAV uncompressed</option>
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-compact-mode">Compact GUI</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-compact-mode" data-on="on" data-off="off">
+      </div>
+    </div>
+    <hr class="settings-divider">
+    <div class="settings-section-label">After a recording</div>
+    <div class="settings-row">
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-auto-transcribe">Auto-transcribe after recording</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-auto-transcribe" data-on="on" data-off="off">
+      </div>
+    </div>
+    <div class="settings-row settings-sub" data-shown-when="set-auto-transcribe=on">
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-auto-reply">Auto-reply after transcription</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-auto-reply" data-on="on" data-off="off">
+      </div>
+    </div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-second-pass">Cleanup pass after recording</label>
+      <select class="settings-select" id="set-second-pass">
+        <option value="off">Off (default)</option>
+        <option value="keep">On - keep both readings</option>
+        <option value="replace">On - keep only the cleaned-up one</option>
       </select>
-      <div class="settings-hint">Opus is about twenty-five times smaller than WAV for the same recording. WAV is used automatically where the browser cannot record Opus. Existing recordings keep their format.</div>
+      <div class="settings-hint">Rereads the whole recording in 60-second windows after it ends, fixing what 4-second live windows get wrong.</div>
     </div>
     <div class="settings-row">
       <label class="settings-label" for="set-transcribe-lang">Transcription language</label>
@@ -569,47 +608,23 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
       </select>
     </div>
     <hr class="settings-divider">
+    <div class="settings-section-label">Speakers and translation</div>
     <div class="settings-row">
-      <label class="settings-label" for="set-ai-instructions">Default AI instructions for all conversations</label>
-      <textarea class="settings-textarea" id="set-ai-instructions" placeholder="e.g. Always reply in Dutch. Be concise. Focus on action items."></textarea>
-      <div class="settings-hint">Replies render as plain text. Empty the box to restore the default.</div>
-    </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-live-transcribe">Start recordings with live transcription on</label>
-      <select class="settings-select" id="set-live-transcribe">
-        <option value="off">Off (default)</option>
-        <option value="on">On</option>
-      </select>
-      <div class="settings-hint">Uploads audio to your transcription server from the moment you press record. 📝 turns it off and on during a recording.</div>
-    </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-opus-bitrate">Opus quality</label>
-      <select class="settings-select" id="set-opus-bitrate">
-        <option value="24">24 kbps - longest sessions</option>
-        <option value="32">32 kbps (default)</option>
-        <option value="48">48 kbps</option>
-        <option value="64">64 kbps</option>
-        <option value="96">96 kbps - closest to uncompressed</option>
-      </select>
-      <div class="settings-hint">Only for Opus. 32 kbps is about 14 MB an hour and transcribes as well as the browser default of about 55 MB an hour.</div>
-    </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-speaker-detection">Label different speakers (experimental)</label>
-      <select class="settings-select" id="set-speaker-detection">
-        <option value="off">Off (default)</option>
-        <option value="on">On</option>
-      </select>
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-speaker-detection">Label different speakers (experimental)</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-speaker-detection" data-on="on" data-off="off">
+      </div>
       <div class="settings-hint">Needs a transcription server with a voice model. With one microphone this is a best guess: it can split one person or merge two.</div>
     </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-speaker-policy">How speakers are named</label>
-      <select class="settings-select" id="set-speaker-policy">
-        <option value="numbers">Numbers only (default)</option>
-        <option value="infer">Named by the conversation</option>
-      </select>
-      <div class="settings-hint"><strong>Numbers only</strong> never guesses. <strong>Named by the conversation</strong> listens for introductions and <em>suggests</em> a name once it is confident, showing how confident it is as it listens. Nothing is ever applied on its own: say &ldquo;confirm speaker 3&rdquo; to accept a suggestion, or say nothing and the speaker stays a number. Voices that introduce themselves with the same name are suggested as one person, and joining them also waits for your confirmation.</div>
+    <div class="settings-row settings-sub" data-shown-when="set-speaker-detection=on">
+      <div class="settings-switch-line">
+        <label class="settings-label" for="set-speaker-policy">Suggest names from the conversation</label>
+        <input type="checkbox" role="switch" class="settings-switch" id="set-speaker-policy" data-on="infer" data-off="numbers">
+      </div>
+      <div class="settings-hint">Off: speakers stay numbers, nothing is guessed (the default). On: names are suggested, never applied on their own.</div>
+      <details class="settings-more"><summary>More</summary><div class="settings-hint">It listens for introductions and <em>suggests</em> a name once it is confident, showing how confident it is as it listens. Nothing is ever applied on its own: say &ldquo;confirm speaker 3&rdquo; to accept a suggestion, or say nothing and the speaker stays a number. Voices that introduce themselves with the same name are suggested as one person, and joining them also waits for your confirmation.</div></details>
     </div>
-    <div class="settings-row">
+    <div class="settings-row settings-sub" data-shown-when="set-speaker-detection=on">
       <label class="settings-label" for="set-max-speakers">Most speakers to distinguish</label>
       <select class="settings-select" id="set-max-speakers">
         <option value="2">2</option>
@@ -630,7 +645,15 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
         <option value="3">3 panels</option>
         <option value="4">4 panels</option>
       </select>
-      <div class="settings-hint">One panel per language heard, showing every line in that language; other lines are translated and tagged. Translation runs continuously on your reply server. While that server is down or busy, lines wait and are translated when it answers again, however far up they have scrolled. Lines still waiting at Stop are translated after the recording, after its reply: the recording then shows 🌐 Translating the rest and how far it is, ✕ stops it and keeps what was done, and the translations appear in the transcript the recording shows.</div>
+      <div class="settings-hint">One panel per language heard, showing every line in that language; other lines are translated and tagged.</div>
+      <details class="settings-more"><summary>More</summary><div class="settings-hint">Translation runs continuously on your reply server. While that server is down or busy, lines wait and are translated when it answers again, however far up they have scrolled. Lines still waiting at Stop are translated after the recording, after its reply: the recording then shows 🌐 Translating the rest and how far it is, ✕ stops it and keeps what was done, and the translations appear in the transcript the recording shows.</div></details>
+    </div>
+    <hr class="settings-divider">
+    <div class="settings-section-label">AI replies</div>
+    <div class="settings-row">
+      <label class="settings-label" for="set-ai-instructions">Default AI instructions for all conversations</label>
+      <textarea class="settings-textarea" id="set-ai-instructions" placeholder="e.g. Always reply in Dutch. Be concise. Focus on action items."></textarea>
+      <div class="settings-hint">Replies render as plain text. Empty the box to restore the default.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-section-label">Your data lives in this browser</div>
@@ -638,15 +661,6 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
       <div class="settings-hint settings-warn">Recordings and text are stored by <strong>this browser, on this device</strong>. Clearing your browsing data or site data deletes all of it. A private or incognito window keeps nothing at all once it is closed. The browser may also evict this storage on its own when the device runs low on space, and automatic deletion below removes things on a schedule. <strong>A downloaded backup is the only copy that survives any of that.</strong></div>
       <button class="settings-danger-btn btn-backup" data-action="downloadBackup">📦 Download backup (.zip)</button>
       <div class="settings-hint">One ZIP with every recording, plus <code>transcripts.json</code> with all text.</div>
-    </div>
-    <div class="settings-row">
-      <label class="settings-label" for="set-second-pass">Cleanup pass after recording</label>
-      <select class="settings-select" id="set-second-pass">
-        <option value="off">Off (default)</option>
-        <option value="keep">On - keep both readings</option>
-        <option value="replace">On - keep only the cleaned-up one</option>
-      </select>
-      <div class="settings-hint">Rereads the whole recording in 60-second windows after it ends, fixing what 4-second live windows get wrong.</div>
     </div>
     <hr class="settings-divider">
     <div class="settings-section-label">Automatic deletion</div>
@@ -657,11 +671,12 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <div class="settings-row">
       <label class="settings-label" for="set-retention-text">Delete transcripts and replies after</label>
       <select class="settings-select" id="set-retention-text"></select>
-      <div class="settings-hint">Audio ages from when its recording ended, text from when it was generated; a transcript stays as long as a reply written from it does. A month is 30 days, a year 365. 📌 beside a recording's format pins it: its countdown freezes and nothing in it is deleted automatically until it is unpinned. The browser can still clear its storage, so download anything you cannot lose.</div>
+      <div class="settings-hint">📌 beside a recording's format pins it: nothing in it is deleted automatically until it is unpinned.</div>
+      <details class="settings-more"><summary>More</summary><div class="settings-hint">Audio ages from when its recording ended, text from when it was generated; a transcript stays as long as a reply written from it does. A month is 30 days, a year 365. A pinned recording's countdown freezes. The browser can still clear its storage, so download anything you cannot lose.</div></details>
       <div class="settings-hint settings-warn"><strong>Shortening either window deletes immediately.</strong> These are not rules that only apply to future recordings: choosing 5 minutes means everything older than 5 minutes is overdue the moment you confirm, and the next sweep removes it - months of recordings, in one step, with no undo. You will be shown exactly how many and how far back before anything happens, and offered a backup first; after a backup, nothing is deleted until you confirm the ZIP was saved.</div>
     </div>
     <hr class="settings-divider">
-    <div class="settings-section-label">Server processing</div>
+    <div class="settings-section-label">Server</div>
     <div class="settings-row">
       <label class="settings-label" for="set-ollama-model">AI model</label>
       <div class="settings-inline">
