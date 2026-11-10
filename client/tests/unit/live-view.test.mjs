@@ -505,6 +505,12 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
             for (const fn of [...(this.handlers[type] || [])]) fn({ target: this, ...event });
         }
         appendChild(child) { child.parentNode = this; this.children.push(child); return child; }
+        insertBefore(child, ref) {
+            child.parentNode = this;
+            const i = this.children.indexOf(ref);
+            this.children.splice(i < 0 ? this.children.length : i, 0, child);
+            return child;
+        }
         focus() { globalThis.document.activeElement = this; }
         descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
         querySelector(sel) {
@@ -716,6 +722,19 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     shower.handle({ type: 'reset' });
     ok(!shownReply.children.some(child => child.className === render.REPLY_THINKING_CLASS),
        'a re-initialised stream clears the previous reasoning');
+    shower.handle({ type: 'thinking', count: 9, text: 'Kept with the reply.', folded: true });
+    shower.handle({ type: 'token', token: 'Saved answer', count: 3, elapsedMs: 0 });
+    shower.handle({ type: 'done', state: 'complete' });
+    const foldedBlock = shownReply.children.find(child => child.className === render.REPLY_THINKING_CLASS);
+    ok(foldedBlock && foldedBlock.open === false && foldedBlock.children[1].textContent === 'Kept with the reply.'
+       && foldedBlock.children[0].textContent === '🤔 Thought · 9 tok' && shownText.textContent === 'Saved answer',
+       'reasoning replayed for a saved reply starts folded, under its heading, and stays out of the answer');
+    shower.handle({ type: 'reset' });
+    shower.handle({ type: 'thinking', count: 1, text: 'Live again' });
+    shower.handle({ type: 'token', token: 'x', count: 1, elapsedMs: 0 });
+    ok(shownReply.children.find(child => child.className === render.REPLY_THINKING_CLASS)?.open === true,
+       'and a reset forgets that, so the next live reasoning starts open again');
+    shower.handle({ type: 'reset' });
 
     // A view opened while the model reasons, or after, is shown the reasoning so far.
     const replayGen = live.replyStreamInit(906);
@@ -813,6 +832,22 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     ok(overlayNow().querySelector('.live-inline-status').textContent === '✂️ Cut off: context window full - 4 chars - gemma4:e4b',
        'a stored reply that was cut off opens saying so, not complete');
     cutHandle.close();
+
+    const reasonedHandle = live.openSavedReplyView({
+        key: 'saved-reply-1003-3', label: 'phone.wav',
+        text: 'Friday it is.', model: 'qwen3:8b', tokenCount: 4, elapsedMs: 1000,
+        thinking: 'They agreed on Friday.', thinkingTokens: 7
+    });
+    const reasonedBlock = overlayNow().querySelector('.reply-thinking');
+    ok(reasonedBlock && reasonedBlock.open === false
+       && overlayNow().querySelector('.reply-thinking-text').textContent === 'They agreed on Friday.'
+       && overlayNow().querySelector('.reply-thinking-summary').textContent === '🤔 Thought · 7 tok'
+       && overlayNow().querySelector('.live-inline-text').textContent === 'Friday it is.',
+       `a saved reply opens with the reasoning that led to it, folded, and the answer as it was (${reasonedBlock && reasonedBlock.open})`);
+    reasonedHandle.close();
+    const plainSaved = live.openSavedReplyView({ key: 'saved-reply-1003-4', label: 'phone.wav', text: 'No reasoning.', model: 'gemma4:e4b' });
+    ok(!overlayNow().querySelector('.reply-thinking'), 'a saved reply without reasoning shows no thinking block');
+    plainSaved.close();
 
     const logHandle = live.openSavedTranscriptView({
         key: 'saved-transcript-1004-1', label: 'phone.wav',

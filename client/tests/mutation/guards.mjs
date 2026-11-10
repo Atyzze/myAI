@@ -2159,8 +2159,8 @@ export const mutations = [
     {
         id: 'MUT-AUTO-LABEL-NOT-MEASURED',
         file: 'src/js/settings.js',
-        from: '        if (el) el.value = getSetting(k);\n    });\n    labelAutoWaveform();\n',
-        to: '        if (el) el.value = getSetting(k);\n    });\n',
+        from: '    paintDependentRows();\n    labelAutoWaveform();\n',
+        to: '    paintDependentRows();\n',
         command: ['node', 'tests/unit/static.test.mjs'],
         expected: /Auto is labelled with the refresh rate measured from this screen/
     },
@@ -3817,7 +3817,7 @@ export const mutations = [
     {
         id: 'MUT-THINKING-BLOCK-CLOSED',
         file: 'src/js/live-render.js',
-        from: "        block.open = true;\n        if (typeof block.setAttribute === 'function') block.setAttribute('open', '');",
+        from: "        block.open = !folded;\n        if (!folded && typeof block.setAttribute === 'function') block.setAttribute('open', '');",
         to: '',
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /the reasoning block starts open/
@@ -3825,8 +3825,8 @@ export const mutations = [
     {
         id: 'MUT-THINKING-NOT-REPLAYED',
         file: 'src/js/live-tabs.js',
-        from: "  if (entry.thinking) messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '' });",
-        to: "  if (entry.thinking && !entry.tokens) messages.push({ type: 'thinking', count: entry.thinking });",
+        from: "    messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '',\n",
+        to: "    if (!entry.tokens) messages.push({ type: 'thinking', count: entry.thinking,\n",
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /a view opened later is shown the reasoning so far/
     },
@@ -3989,5 +3989,37 @@ export const mutations = [
         to: '        return head;',
         command: ['node', 'tests/unit/pure.test.mjs'],
         expected: /keeps an error's name, message and where it was thrown/
+    },
+    {
+        id: 'MUT-REASONING-NOT-STORED',
+        file: 'src/js/reply.js',
+        from: "                ...(storedThinking ? { thinking: storedThinking, thinkingTokens } : {})",
+        to: "                ...({})",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the reasoning is kept with the reply it led to/
+    },
+    {
+        id: 'MUT-SAVED-REASONING-OPEN',
+        file: 'src/js/live-render.js',
+        from: '                if (msg.folded) thinkingFolded = true;\n',
+        to: '',
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /reasoning replayed for a saved reply starts folded/
+    },
+    {
+        id: 'MUT-SAVED-REASONING-DROPPED',
+        file: 'src/js/live-tabs.js',
+        from: '    thinkingText: reasoning,\n',
+        to: "    thinkingText: '',\n",
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /a saved reply opens with the reasoning that led to it, folded/
+    },
+    {
+        id: 'MUT-SWITCH-STORES-CHECKBOX-VALUE',
+        file: 'src/js/settings.js',
+        from: '    if (!isSwitch(el)) return el.value;\n',
+        to: '    return el.value;\n',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a switch shows a stored value as on, and stores it back as that value/
     },
 ];

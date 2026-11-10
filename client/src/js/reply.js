@@ -471,11 +471,17 @@ export async function runSummary(recId, progressCallback, dropTId) {
         const parser = createReplyStreamReader();
         let finish = null;
         let thinkingSeen = false;
+        // A thinking model's reasoning is kept with the reply it led to (Build 144), so the reply
+        // opened later shows it too, folded. It stays out of the reply's text.
+        let thinkingText = '';
+        let thinkingTokens = 0;
 
         const applyEvents = events => {
             for (const event of events) {
                 if (event.type === 'error') throw new Error(`Reply server: ${event.message}`);
                 if (event.type === 'thinking') {
+                    thinkingText += String(event.text || '');
+                    thinkingTokens = Math.max(thinkingTokens, Number(event.count) || 0);
                     replyStreamThinking(recId, event.count, streamGen, event.text);
                     if (!thinkingSeen) { thinkingSeen = true; progressCallback('__thinking__'); }
                 }
@@ -506,6 +512,7 @@ export async function runSummary(recId, progressCallback, dropTId) {
         if (finish && model) learnTokenScale(model, budget.estimatedTokens, finish.promptTokens);
         replyStreamDone(recId, streamGen, outcome);
         const storedText = outcome.notice ? `${fullText}\n\n${outcome.notice}` : fullText;
+        const storedThinking = thinkingText.trim();
 
         const stored = await dbUpdate(CONFIG.STORE_REC, recId, (current) => {
             if (!current || (current.resultGeneration || 0) !== resultGeneration) return null;
@@ -518,7 +525,8 @@ export async function runSummary(recId, progressCallback, dropTId) {
                 tokenCount: measured ? measured.count : 0,
                 elapsedMs:  measured ? measured.elapsedMs : 0,
                 ...(outcome.state !== 'complete' ? { end: { state: outcome.state, reason: outcome.reason } } : {}),
-                ...(condensed ? { condensed: true } : {})
+                ...(condensed ? { condensed: true } : {}),
+                ...(storedThinking ? { thinking: storedThinking, thinkingTokens } : {})
             });
             delete current.pipelineError;
             delete current.pipelineErrorAt;

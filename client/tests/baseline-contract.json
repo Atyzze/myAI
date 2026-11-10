@@ -2195,6 +2195,32 @@
         "MUT-LOG-NEVER-TRIMMED",
         "MUT-LOG-ERROR-STACK-DROPPED"
       ]
+    },
+    {
+      "id": "REPLY-REASONING-KEPT-001",
+      "title": "A thinking model's reasoning is kept with the reply it led to, with its length, never as part of the reply's text; a saved reply opened later shows it above the answer, folded, in the in-page view and in a pop-up, and one without reasoning shows none; live reasoning still starts open",
+      "suites": [
+        "app-behaviour",
+        "live-view-unit",
+        "browser-lifecycle"
+      ],
+      "mutationGuards": [
+        "MUT-REASONING-NOT-STORED",
+        "MUT-SAVED-REASONING-OPEN",
+        "MUT-SAVED-REASONING-DROPPED"
+      ]
+    },
+    {
+      "id": "SETTINGS-SWITCHES-001",
+      "title": "Every setting with two values is an on/off switch that stores the same value its dropdown stored, Settings is grouped under headings with long explanations folded, a setting that only applies while another is on is shown only then and keeps its value, and every stored setting still has exactly one control",
+      "suites": [
+        "static-integrity",
+        "app-behaviour",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-SWITCH-STORES-CHECKBOX-VALUE"
+      ]
     }
   ],
   "untestedModules": []

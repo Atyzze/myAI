@@ -199,7 +199,10 @@ function normalEnd(end) {
 function replyStreamSnapshot(entry) {
   const messages = [];
   if (entry.model) messages.push({ type: 'model', model: entry.model });
-  if (entry.thinking) messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '' });
+  if (entry.thinking) {
+    messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '',
+                    ...(entry.thinkingFolded ? { folded: true } : {}) });
+  }
   if (entry.tokens) {
     messages.push({
       type: 'token',
@@ -268,9 +271,15 @@ export function replyStreamStats(recId) {
   };
 }
 
-function finishedReplyEntry({ text, model, tokenCount, elapsedMs, end = null }) {
+// A saved reply carries the reasoning that led to it, if any. It opens folded: what was read
+// back is the reply, and a tap shows how the model got there.
+function finishedReplyEntry({ text, model, tokenCount, elapsedMs, end = null, thinking = '', thinkingTokens = 0 }) {
   const span = Math.max(0, Number(elapsedMs) || 0);
+  const reasoning = String(thinking || '');
   return {
+    thinking: reasoning ? Math.max(1, Number(thinkingTokens) || 0) : 0,
+    thinkingText: reasoning,
+    thinkingFolded: true,
     tokens:  String(text || ''),
     count:   Math.max(0, Number(tokenCount) || 0),
     firstAt: span ? 1 : 0,
@@ -332,10 +341,11 @@ function openSavedView({ key, windowName, kind, label, entry }) {
   return win;
 }
 
-export function openSavedReplyView({ key, windowName, label, text, model, tokenCount, elapsedMs, end = null }) {
+export function openSavedReplyView({ key, windowName, label, text, model, tokenCount, elapsedMs, end = null,
+                                     thinking = '', thinkingTokens = 0 }) {
   return openSavedView({
     key, windowName, kind: 'replystream', label,
-    entry: finishedReplyEntry({ text, model, tokenCount, elapsedMs, end })
+    entry: finishedReplyEntry({ text, model, tokenCount, elapsedMs, end, thinking, thinkingTokens })
   });
 }
 

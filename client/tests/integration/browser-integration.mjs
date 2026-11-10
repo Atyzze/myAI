@@ -664,6 +664,9 @@ try {
     await sleep(5000);
     await appA.client.evaluate('window.__diskFull = true; true');
     await waitFor(appA.client, "document.getElementById('recordBtn').textContent === 'Start Recording' && !document.getElementById('recordBtn').disabled", 40000);
+    // Stop puts the button back before its last repaint, and offers the audio after it: under load
+    // that repaint takes a while, so the offer is waited for, not looked for at once.
+    await waitFor(appA.client, "window.__alerts.some(text => /Download it before closing this page/.test(text))", 10000).catch(() => null);
     const fullDisk = await appA.client.evaluate(`(async () => {
         const db = await import(${dbImport}); const { CONFIG } = await import(${configImport});
         const rec = (await db.dbExec(CONFIG.STORE_REC, 'getAll')).find(row => row.processing);
@@ -905,6 +908,46 @@ try {
        `pressing it again pauses (${savedPopup.pausedAt} then ${savedPopup.afterPause})`);
     ok(savedPopup.stored === '120', `the speed chosen is remembered for the next opened text (${savedPopup.stored})`);
     await appA.client.evaluate('window.__savedWin.close(); localStorage.removeItem("myai-autoscroll-speed"); true');
+
+    // A saved reply keeps the reasoning that led to it: opened from the list, it shows it folded.
+    const reasonedDbImport = JSON.stringify(new URL('src/js/db.js', rootUrl).href);
+    const reasonedConfigImport = JSON.stringify(new URL('src/js/config.js', rootUrl).href);
+    const reasonedId = await appA.client.evaluate(`(async () => {
+        const db = await import(${reasonedDbImport});
+        const { CONFIG } = await import(${reasonedConfigImport});
+        const now = Date.now();
+        const id = await db.dbExec(CONFIG.STORE_REC, 'add', {
+            filename: 'reasoned.wav', timestamp: now, durationMs: 1000, audioBytes: 0, resultGeneration: 0,
+            transcripts: [{ id: 't1', text: 'We ship Friday.', plain: 'We ship Friday.', source: 'S', time: now }],
+            summaries: [{ id: 's1', transcriptId: 't1', text: 'Fine, Friday it is.', source: 'S', time: now, model: 'qwen3:8b',
+                          tokenCount: 5, elapsedMs: 500, thinking: 'They agreed on Friday.\\nSo confirm it.', thinkingTokens: 9 }]
+        });
+        await window.viewSummaryById(id, 's1');
+        window.__reasonedWin = window.open('', 'saved-reply-' + id);
+        return id;
+    })()`, { userGesture: true });
+    await waitFor(appA.client, "!!(window.__reasonedWin && window.__reasonedWin.document.getElementById('text')"
+        + " && window.__reasonedWin.document.getElementById('text').textContent === 'Fine, Friday it is.')", 15000);
+    const reasonedView = await appA.client.evaluate(`(() => {
+        const doc = window.__reasonedWin.document;
+        const block = doc.querySelector('details.reply-thinking');
+        return { block: !!block, open: block ? block.open : null,
+                 heading: block ? block.querySelector('summary').textContent : '',
+                 reasoning: block ? block.querySelector('.reply-thinking-text').textContent : '',
+                 above: !!block && block.nextElementSibling === doc.getElementById('text'),
+                 answer: doc.getElementById('text').textContent };
+    })()`);
+    ok(reasonedView.block && reasonedView.open === false && reasonedView.above
+       && reasonedView.heading === '🤔 Thought · 9 tok' && reasonedView.reasoning === 'They agreed on Friday.\nSo confirm it.'
+       && reasonedView.answer === 'Fine, Friday it is.',
+       `a saved reply opened from the list shows the reasoning that led to it, folded above the answer and never in it (${JSON.stringify(reasonedView)})`);
+    await appA.client.evaluate(`(async () => {
+        window.__reasonedWin.close();
+        const db = await import(${reasonedDbImport});
+        const { CONFIG } = await import(${reasonedConfigImport});
+        await db.dbExec(CONFIG.STORE_REC, 'delete', ${reasonedId});
+        return true;
+    })()`);
 
     const audioImport = JSON.stringify(new URL('src/js/audio.js', rootUrl).href);
     const pipelineImport = JSON.stringify(new URL('src/js/auto-pipeline.js', rootUrl).href);
