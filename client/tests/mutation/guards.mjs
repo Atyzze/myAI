@@ -2159,8 +2159,8 @@ export const mutations = [
     {
         id: 'MUT-AUTO-LABEL-NOT-MEASURED',
         file: 'src/js/settings.js',
-        from: '        if (el) el.value = getSetting(k);\n    });\n    labelAutoWaveform();\n',
-        to: '        if (el) el.value = getSetting(k);\n    });\n',
+        from: '    paintDependentRows();\n    labelAutoWaveform();\n',
+        to: '    paintDependentRows();\n',
         command: ['node', 'tests/unit/static.test.mjs'],
         expected: /Auto is labelled with the refresh rate measured from this screen/
     },
@@ -3817,7 +3817,7 @@ export const mutations = [
     {
         id: 'MUT-THINKING-BLOCK-CLOSED',
         file: 'src/js/live-render.js',
-        from: "        block.open = true;\n        if (typeof block.setAttribute === 'function') block.setAttribute('open', '');",
+        from: "        block.open = !folded;\n        if (!folded && typeof block.setAttribute === 'function') block.setAttribute('open', '');",
         to: '',
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /the reasoning block starts open/
@@ -3825,8 +3825,8 @@ export const mutations = [
     {
         id: 'MUT-THINKING-NOT-REPLAYED',
         file: 'src/js/live-tabs.js',
-        from: "  if (entry.thinking) messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '' });",
-        to: "  if (entry.thinking && !entry.tokens) messages.push({ type: 'thinking', count: entry.thinking });",
+        from: "    messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '',\n",
+        to: "    if (!entry.tokens) messages.push({ type: 'thinking', count: entry.thinking,\n",
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /a view opened later is shown the reasoning so far/
     },
