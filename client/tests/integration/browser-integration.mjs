@@ -664,6 +664,9 @@ try {
     await sleep(5000);
     await appA.client.evaluate('window.__diskFull = true; true');
     await waitFor(appA.client, "document.getElementById('recordBtn').textContent === 'Start Recording' && !document.getElementById('recordBtn').disabled", 40000);
+    // Stop puts the button back before its last repaint, and offers the audio after it: under load
+    // that repaint takes a while, so the offer is waited for, not looked for at once.
+    await waitFor(appA.client, "window.__alerts.some(text => /Download it before closing this page/.test(text))", 10000).catch(() => null);
     const fullDisk = await appA.client.evaluate(`(async () => {
         const db = await import(${dbImport}); const { CONFIG } = await import(${configImport});
         const rec = (await db.dbExec(CONFIG.STORE_REC, 'getAll')).find(row => row.processing);
