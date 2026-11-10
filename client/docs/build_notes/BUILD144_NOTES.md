@@ -22,6 +22,8 @@ Two things. A thinking model's reasoning was shown while its reply streamed, the
 
 `app-behaviour`: a fake thinking model's reasoning is stored with its reply and its length, and a switch shows a stored value and stores it back as that value. `live-view-unit`: reasoning replayed with `folded` starts folded, under its heading, out of the answer; a reset makes the next live reasoning start open; a saved reply opens with its reasoning folded, and one without shows no block. `browser-lifecycle`: in a real pop-up, a saved reply opened from the list shows its reasoning folded above the answer. `static-integrity`: every stored setting still has exactly one control, and each switch's default is one of its two positions. `user-journeys`: in Chromium, no setting is a two-value dropdown and seven are switches, a switch stores what its dropdown did, auto-reply, the Opus quality and the speaker settings show only when they apply, and Settings reopened shows each switch as stored.
 
-Four new mutation guards: the reasoning not stored, a saved reply's reasoning starting open, the saved view dropping the reasoning, and a switch storing its checkbox value instead of the setting's.
+Four new mutation guards: the reasoning not stored, a saved reply's reasoning starting open, the saved view dropping the reasoning, and a switch storing its checkbox value instead of the setting's. Three guards follow lines this build moved (the Auto waveform label, the open reasoning block, the replayed reasoning).
 
-GATE_RESULT
+The `browser-lifecycle` check that a full disk at Stop offers the audio held in memory now waits for that offer. Stop puts the record button back before its last repaint and makes the offer after it, so under the gate's parallel load the check could look in between and fail; it asserts the same thing.
+
+22 suites passed (strict gate) in 11 min 18 s; slowest mutation-guards (6 min 16 s)
