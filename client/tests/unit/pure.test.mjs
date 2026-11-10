@@ -4217,6 +4217,82 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
 }
 
 {
+    const { liveSnapshotDue, LIVE_SNAPSHOT_SMALL_CHARS, LIVE_SNAPSHOT_MIN_INTERVAL_MS } = await import('../../src/js/capture-health-core.js');
+    const MINUTE = 60000;
+    let last = null;
+    let longestGap = 0;
+    for (let minute = 1; minute <= 5; minute++) {
+        const sizeAndSignature = { chars: minute * 900, signature: `lines-${minute}` };
+        if (liveSnapshotDue({ now: minute * MINUTE, last, ...sizeAndSignature })) {
+            if (last) longestGap = Math.max(longestGap, minute * MINUTE - last.at);
+            last = { at: minute * MINUTE, ...sizeAndSignature };
+        }
+    }
+    ok(last && last.at === 5 * MINUTE && longestGap === MINUTE,
+       `snapshot: a live transcript of a few minutes is saved every minute it changed, so a browser that dies at Stop loses at most a minute of it (${JSON.stringify(last)}, longest gap ${longestGap / MINUTE} min)`);
+    ok(!liveSnapshotDue({ now: 30000, last: { at: 0, chars: 900, signature: 'a' }, chars: 1800, signature: 'b' })
+       && LIVE_SNAPSHOT_MIN_INTERVAL_MS === MINUTE,
+       'snapshot: but never more than once a minute');
+    ok(!liveSnapshotDue({ now: 2 * MINUTE, last: { at: MINUTE, chars: LIVE_SNAPSHOT_SMALL_CHARS + 10, signature: 'a' },
+                          chars: LIVE_SNAPSHOT_SMALL_CHARS + 500, signature: 'b' }),
+       'snapshot: and a long one still waits until it has grown enough');
+}
+
+{
+    const { captureBeatRecord, interruptionFromBeat, describeInterruption, STOP_STEPS, STOP_ENDED } =
+        await import('../../src/js/capture-health-core.js');
+    const beat = captureBeatRecord({ recId: 3, ownerId: 'tab', now: 5000, durationMs: 4000, state: 'finalizing', stopStep: 'releasing' });
+    ok(beat.stopStep === 'releasing' && !('stopStep' in captureBeatRecord({ recId: 3, now: 1, state: 'recording' })),
+       'beat: during Stop the beat names the step Stop has reached, and a recording\'s beat names none');
+    ok(Object.keys(STOP_STEPS).join(' ') === 'securing releasing liveTail noting closing saving',
+       'stop: Stop saves what is only in memory before it lets go of the microphone, the encoder or the audio graph');
+    const atStop = interruptionFromBeat(beat);
+    ok(atStop && atStop.during === 'stop' && atStop.step === 'releasing' && atStop.lastAliveAt === 5000,
+       `interruption: a beat left during Stop says the app was closed during Stop, at which step and when (${JSON.stringify(atStop)})`);
+    ok(/stopping this recording \(letting go of the microphone and the encoder\)\. Its audio had been saved by then/.test(describeInterruption(atStop)),
+       'interruption: after the first step of Stop the audio had been saved');
+    ok(/at most the last few seconds of audio are missing/.test(describeInterruption(interruptionFromBeat({ ...beat, stopStep: 'securing' })))
+       && /while it was recording/.test(describeInterruption(interruptionFromBeat({ ...beat, state: 'recording', stopStep: undefined }))),
+       'interruption: during the first step, or while recording, the last few seconds may be missing');
+    ok(interruptionFromBeat({ ...beat, stopStep: STOP_ENDED }) === null && interruptionFromBeat(null) === null
+       && interruptionFromBeat({ ...beat, state: 'ready' }) === null,
+       'interruption: a Stop that ended by itself without saving, a full disk say, is not reported as the app being closed');
+}
+
+{
+    const { stringifyArgs, clampMessage, formatLogEntries, entriesToDrop, describeUnclosedSession,
+            LOG_MAX_MESSAGE_CHARS, normalLevel } = await import('../../src/js/debug-log-core.js');
+    const err = new TypeError('cannot read the thing');
+    err.stack = 'TypeError: cannot read the thing\n    at stopRecordingNow (recorder.js:1450:9)\n    at a\n    at b\n    at c\n    at d';
+    const text = stringifyArgs(['Stop failed:', err, { kind: 'quota' }, 3]);
+    ok(/^Stop failed: TypeError: cannot read the thing \(at stopRecordingNow \(recorder\.js:1450:9\) ← at a ← at b\) \{"kind":"quota"\} 3$/.test(text),
+       `system log: a console message keeps an error's name, message and where it was thrown, and objects as JSON (${text})`);
+    ok(clampMessage('x'.repeat(LOG_MAX_MESSAGE_CHARS + 50)).length < LOG_MAX_MESSAGE_CHARS + 40
+       && /50 more characters\)$/.test(clampMessage('x'.repeat(LOG_MAX_MESSAGE_CHARS + 50))),
+       'system log: a very long message is cut, saying how much was left out');
+    ok(normalLevel('warning') === 'warn' && normalLevel('debug') === 'info' && normalLevel('error') === 'error',
+       'system log: every entry is info, warn or error');
+    const lines = formatLogEntries([
+        { t: Date.UTC(2026, 10, 10, 11, 0, 0, 5), s: 'aaaaaaaa-1', l: 'info', c: 'app', m: 'started' },
+        { t: Date.UTC(2026, 10, 10, 11, 0, 1), s: 'aaaaaaaa-1', l: 'warn', c: 'stop', m: 'step releasing' },
+        { t: Date.UTC(2026, 10, 10, 11, 5, 0), s: 'bbbbbbbb-2', l: 'error', c: 'page', m: 'Uncaught' }
+    ]).split('\n');
+    ok(lines.length === 5 && /session aaaaaaaa/.test(lines[0]) && /\.005  INFO   \[app\] started$/.test(lines[1])
+       && /WARN   \[stop\] step releasing$/.test(lines[2]) && /session bbbbbbbb/.test(lines[3]) && /ERROR  \[page\] Uncaught$/.test(lines[4]),
+       `system log: entries read oldest first, one line each with time, level and what they are about, a line between page loads (${lines.join(' | ')})`);
+    ok(entriesToDrop(5200, 5000) === 200 && entriesToDrop(10, 5000) === 0, 'system log: only the oldest entries past the limit are dropped');
+    const cutOff = { id: 's1', build: '143', startedAt: Date.UTC(2026, 10, 10, 11, 0), lastAt: Date.UTC(2026, 10, 10, 11, 4), visibility: 'visible' };
+    const lastEntry = { t: Date.UTC(2026, 10, 10, 11, 4), c: 'stop', m: 'recording 7: releasing (letting go of the microphone and the encoder)' };
+    const note = describeUnclosedSession(cutOff, lastEntry);
+    ok(/build 143/.test(note) && /ended without the page closing normally/.test(note)
+       && /\[stop\] recording 7: releasing/.test(note) && /on screen then, so the browser most likely crashed/.test(note),
+       `system log: a session that never said it was ending is reported with its last entry, and on screen means a crash (${note})`);
+    ok(/in the background then/.test(describeUnclosedSession({ ...cutOff, visibility: 'hidden' }, lastEntry))
+       && describeUnclosedSession({ ...cutOff, endedAt: Date.now() }, lastEntry) === '',
+       'system log: in the background it was likelier ended by the phone, and a session that closed normally is not reported');
+}
+
+{
     const { releaseReviewAudioOfWaitingWindows, queuedWindowBytes, capRetryQueue, REVIEW_AUDIO_KEPT_WINDOWS } =
         await import('../../src/js/live-scribe-core.js');
     const windowItem = index => {

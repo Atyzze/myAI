@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="142">
+<meta name="myai-build" content="143">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -274,6 +274,17 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 #help-version-state{flex:1;min-width:150px;font:12px/1.5 monospace;color:#9fbfa4}
 .help-update-btn{background:#13301a;border:1px solid #2f6b3a;color:#8fe0a0;border-radius:8px;padding:6px 10px;font-size:12px;white-space:nowrap}
 .help-update-btn:hover:not(:disabled){background:#1a4024;border-color:#4caf50}
+#helpPanel .help-logs{display:flex;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid #2a3340;background:#0c1016;border-radius:8px;padding:9px 11px}
+#helpPanel .help-logs span{flex:1;min-width:150px;font-size:12px;line-height:1.5;color:#9fb0c4}
+#logsOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:310;align-items:flex-start;justify-content:center;padding-top:40px}
+#logsOverlay.open{display:flex}
+#logsPanel{background:#111;border:1px solid #444;border-radius:16px;padding:16px;width:min(760px,94vw);max-height:88vh;text-align:left;display:flex;flex-direction:column;gap:10px;box-sizing:border-box}
+#logsPanel h2{font-size:15px;color:#ccc;font-family:monospace;letter-spacing:.05em;margin:0}
+#logsHint{font-size:12px;color:#9a9a9a;line-height:1.5;margin:0}
+.logs-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.logs-actions .logs-clear{background:#2a1414;border-color:#6b2f2f;color:#e0a0a0}
+#logsStatus{font:12px/1.4 monospace;color:#8a9;flex:1;min-width:140px}
+#logsText{flex:1;min-height:200px;overflow:auto;margin:0;padding:10px;background:#0a0a0a;border:1px solid #333;border-radius:8px;font:11px/1.45 monospace;color:#cfd8dc;white-space:pre-wrap;word-break:break-word}
 #helpOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;align-items:flex-start;justify-content:center;padding-top:60px}
 #helpOverlay.open{display:flex}
 #helpPanel{background:#111;border:1px solid #444;border-radius:16px;padding:20px;width:min(460px,92vw);max-height:82vh;overflow-y:auto;text-align:left;display:flex;flex-direction:column;gap:12px}
@@ -418,6 +429,23 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
 <button id="helpBtn" title="How this app works" aria-label="Open help and storage guide">❓</button>
 <button id="app-version" data-action="appUpdate" aria-label="App version"></button>
 
+<div id="logsOverlay" aria-hidden="true">
+  <div id="logsPanel" role="dialog" aria-modal="true" aria-labelledby="logsTitle" tabindex="-1">
+    <div class="settings-header">
+      <h2 id="logsTitle">🧾 System logs</h2>
+      <button class="settings-close" data-action="closeLogs" aria-label="Close system logs">✕ Close</button>
+    </div>
+    <p id="logsHint"></p>
+    <div class="logs-actions">
+      <button class="help-update-btn" data-action="copyLogs">📋 Copy</button>
+      <button class="help-update-btn" data-action="downloadLogs">⬇️ Download</button>
+      <button class="help-update-btn logs-clear" data-action="clearLogs">🗑️ Clear</button>
+      <span id="logsStatus" role="status"></span>
+    </div>
+    <pre id="logsText" tabindex="0" aria-label="System log"></pre>
+  </div>
+</div>
+
 <div id="helpOverlay" aria-hidden="true">
   <div id="helpPanel" role="dialog" aria-modal="true" aria-labelledby="helpTitle" tabindex="-1">
     <div class="settings-header">
@@ -428,6 +456,10 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <div class="help-update">
       <span id="help-version-state">Reading this build...</span>
       <button id="help-update-btn" class="help-update-btn" data-action="appUpdate">Check for update</button>
+    </div>
+    <div class="help-logs">
+      <span>Everything the app does is written to a log on this device, so a crash or anything odd can be looked into afterwards.</span>
+      <button id="help-logs-btn" class="help-update-btn" data-action="openLogs">🧾 Open system logs</button>
     </div>
 
     <p>Record voice notes in your browser. Recordings and text are stored in this browser. Transcription sends audio to your <code>/transcribe</code> server and replies send text to your <code>/ollama</code> server; the app contacts no other service.</p>
@@ -445,7 +477,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <p><strong>⬇️ Download</strong> saves the recording as a file. <strong>🗑️ Delete</strong> removes it. <strong>💬 Continue</strong> records a follow-up that remembers this note. <strong>🔗 Link</strong> bundles several recordings for one follow-up. The small 🗑️ beside ▶ deletes only the audio and keeps the text.</p>
 
     <h3>🟢 LIVE and tabs</h3>
-    <p>The recording in progress shows a LIVE badge. Only one tab records at a time; other tabs show <strong>LIVE · OTHER TAB</strong>. After Stop the recording says <strong>Saving…</strong> until it is saved. If a tab is closed during a recording, any tab still open recovers what it stored, within a minute and without a reload; until then the recording offers <strong>Recover now</strong> and Delete.</p>
+    <p>The recording in progress shows a LIVE badge. Only one tab records at a time; other tabs show <strong>LIVE · OTHER TAB</strong>. After Stop the recording says <strong>Saving…</strong> until it is saved. If a tab is closed during a recording, any tab still open recovers what it stored, within a minute and without a reload; until then the recording offers <strong>Recover now</strong> and Delete. If the whole app was closed, by a crash or by the phone, the recording is recovered as soon as the app is opened again, and its row says whether that happened while recording or at which step of Stop. What the app was doing at the time is in <strong>🧾 Open system logs</strong> at the top of this page.</p>
 
     <h3>📝 Live transcription</h3>
     <p>📝 beside Start Recording starts a recording with live transcription on, whatever the setting says; 📋 on the other side starts one with the clipboard as context (or, during a recording, adds to it), and the big button starts a plain one that follows the setting. During a recording, 📝 shows or hides the transcript a few seconds behind speech; tap the waveform for fullscreen; Settings can draw it less often, or not at all, to save battery. Italic text is the sentence still being spoken. If the connection drops, audio waits in order and is sent when it returns. If the server keeps failing on a few seconds of audio while it answers the rest, that part is left out here with a note. With <strong>Auto-transcribe</strong> on, every part the live transcript missed is transcribed after the recording; with it off, the saved transcript marks each such part <strong>[not transcribed live]</strong> and the recording offers <strong>📝 Fill gaps</strong>, which sends only those parts. The live transcript is saved with the recording as it grows, at least every five minutes, and transcribing after recording only sends the parts it missed. <strong>Cleanup pass</strong> in Settings rereads the whole recording.</p>

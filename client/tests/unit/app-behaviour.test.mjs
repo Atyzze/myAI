@@ -706,6 +706,100 @@ function zipEntries(bytes) {
     ok(!!(await row(saving)).captureError, 'capture notice: its failure is still there for the save to use');
 }
 
+// A recording recovered after the app was closed under it says when that happened; ✕ removes the note.
+{
+    await clearAll();
+    const gui = await import('../../src/js/gui.js');
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowHtml = recId => (walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`) || {}).innerHTML || '';
+    const atStop = await addRecording({ filename: 'closed at stop',
+                                        interruption: { during: 'stop', step: 'releasing', lastAliveAt: Date.now() } }, { audio: wav(1) });
+    const midway = await addRecording({ filename: 'closed while recording',
+                                        interruption: { during: 'recording', lastAliveAt: Date.now() } }, { audio: wav(1) });
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/closed while it was stopping this recording \(letting go of the microphone and the encoder\)\. Its audio had been saved by then/.test(rowHtml(atStop))
+       && /data-action="dismissInterruption" data-rec-id="\d+"/.test(rowHtml(atStop)),
+       'interruption note: a recording recovered after the app was closed during Stop says at which step, and offers ✕');
+    ok(/closed while it was recording, before it could save the recording itself\. .*at most the last few seconds of audio are missing/.test(rowHtml(midway)),
+       'interruption note: one closed while recording says at most its last seconds are missing');
+    ok(await window.dismissInterruption(atStop), 'interruption note: a tap on ✕ dismisses it');
+    const after = await row(atStop);
+    ok(!after.interruption && Number(after.audioBytes) > 0 && after.filename === 'closed at stop',
+       'interruption note: it is removed from the stored recording, and nothing else about the recording changes');
+    ok(!/closed while it was stopping/.test(rowHtml(atStop)) && /closed while it was recording/.test(rowHtml(midway)),
+       'interruption note: and only that one is gone from the list');
+}
+
+// The system log: written to a database of its own, read back across page loads, and a page load
+// that never said it was ending is reported once by the next one.
+{
+    const { createDebugLog, LOG_DB_NAME } = await import('../../src/js/debug-log.js');
+    const stored = () => memoryIdb.rows('entries', LOG_DB_NAME);
+    let clock = Date.now();
+    const now = () => clock;
+    const first = createDebugLog({ sessionId: 'first-page', now, holdSession() {}, liveSessions: async () => new Set() });
+    first.add('info', 'app', 'logged before the database was open');
+    await first.install({ build: '143', visibility: 'visible' });
+    first.add('info', 'recorder', 'recording 7 starting');
+    first.add('warn', 'stop', 'recording 7: releasing (letting go of the microphone and the encoder)');
+    await settle();
+    await memoryIdb.idle();
+    ok(stored().some(entry => /logged before the database was open/.test(entry.m))
+       && stored().some(entry => entry.l === 'warn' && /releasing/.test(entry.m)),
+       `system log: what is logged before the database opens is kept, and a warning is on disk at once (${stored().length} entries)`);
+    await first.flush();
+    ok(stored().some(entry => /recording 7 starting/.test(entry.m)), 'system log: and flush() puts every entry on disk');
+
+    clock += 60000;
+    const second = createDebugLog({ sessionId: 'second-page', now, holdSession() {}, liveSessions: async () => new Set() });
+    await second.install({ build: '143', visibility: 'visible' });
+    const cutOff = (await second.read()).filter(entry => entry.s === 'second-page' && /ended without the page closing normally/.test(entry.m));
+    ok(cutOff.length === 1 && cutOff[0].l === 'warn' && /\[stop\] recording 7: releasing/.test(cutOff[0].m)
+       && /most likely crashed/.test(cutOff[0].m),
+       `system log: the next page load says the one before was cut off while on screen, and what it was doing last (${cutOff[0] && cutOff[0].m})`);
+    await second.markEnded();
+
+    clock += 60000;
+    const thirdBefore = createDebugLog({ sessionId: 'still-open', now, holdSession() {}, liveSessions: async () => new Set() });
+    await thirdBefore.install({ build: '143', visibility: 'visible' });
+    await thirdBefore.flush();
+    const fourth = createDebugLog({ sessionId: 'fourth-page', now, holdSession() {}, liveSessions: async () => new Set(['still-open']) });
+    await fourth.install({ build: '143', visibility: 'visible' });
+    ok(!(await fourth.read()).some(entry => entry.s === 'fourth-page' && /ended without the page closing normally/.test(entry.m)),
+       'system log: neither a page that closed normally nor one still open in another tab is reported as cut off');
+
+    const small = createDebugLog({ sessionId: 'trimmed', now, maxEntries: 20, holdSession() {}, liveSessions: async () => new Set(['still-open', 'fourth-page']) });
+    await small.install({ build: '143' });
+    for (let i = 0; i < 150; i++) small.add('info', 'app', `entry ${i}`);
+    await small.flush();
+    ok(stored().length === 20 && stored().some(entry => entry.m === 'entry 149') && !stored().some(entry => entry.m === 'entry 0'),
+       `system log: it keeps only the newest entries (${stored().length} kept)`);
+    await small.clear();
+    ok(stored().length === 0, 'system log: Clear empties it');
+}
+
+// Installed for the page, the log takes every console message, and ❓ → 🧾 shows it.
+{
+    const debugLog = await import('../../src/js/debug-log.js');
+    const logsView = await import('../../src/js/logs-view.js');
+    await debugLog.installSystemLog({ build: '143' });
+    logsView.exposeLogsGlobals();
+    console.warn('a warning only the console saw');
+    await debugLog.flushSystemLog(2000);
+    await window.openLogs();
+    const shown = document.getElementById('logsText').textContent;
+    ok(/WARN   \[console\] a warning only the console saw/.test(shown) && /\[app\] started · build 143/.test(shown),
+       'system log: a console message lands in the log, and Open system logs shows it with how the app started');
+    ok(document.getElementById('logsOverlay').classList.contains('open'), 'system log: the log opens over the help');
+    page.answer(true);
+    ok(await window.clearLogs(), 'system log: Clear asks first and then clears');
+    ok(!/a warning only the console saw/.test(document.getElementById('logsText').textContent),
+       'system log: and the cleared entries are gone from the view');
+    window.closeLogs();
+    ok(!document.getElementById('logsOverlay').classList.contains('open'), 'system log: ✕ closes it');
+}
+
 await clearAll();
 memoryIdb.reset();
 console.log(`✓ all ${assertions} app-behaviour assertions passed`);

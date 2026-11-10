@@ -3008,8 +3008,8 @@ export const mutations = [
     {
         id: 'MUT-BEAT-FLAGS-DROPPED-AFTER-CLEANUP',
         file: 'src/js/recorder.js',
-        from: "        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,\n                                    { captureFlags: stopFlags }),",
-        to: "        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId),",
+        from: "        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,\n                                    { captureFlags: stopFlags, stopStep }),",
+        to: "        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,\n                                    { stopStep }),",
         command: ['node', 'tests/unit/storage-paths.test.mjs'],
         expected: /the beat still says capture failed and audio is missing/
     },
@@ -3056,8 +3056,8 @@ export const mutations = [
     {
         id: 'MUT-FINAL-BEAT-NOT-FORCED',
         file: 'src/js/recorder.js',
-        from: '{ force: true, captureFlags: stopFlags }',
-        to: '{ captureFlags: stopFlags }',
+        from: '{ force: true, captureFlags: stopFlags, stopStep }',
+        to: '{ captureFlags: stopFlags, stopStep }',
         command: ['node', 'tests/unit/storage-paths.test.mjs'],
         expected: /also when noting the stop failed once/
     },
@@ -3845,5 +3845,149 @@ export const mutations = [
         to: '<button class="rec-dismiss" data-rec-id="${rec.id}"',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /the notice offers ✕ to dismiss it/
+    },
+    {
+        id: 'MUT-LOCK-PROOF-NEVER',
+        file: 'src/js/recording-lock.js',
+        from: '    return held && holdDepth === 1 && !!lockTask;',
+        to: '    return false;',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /recovered as soon as the app opens again, not once its heartbeat has gone stale/
+    },
+    {
+        id: 'MUT-LOCK-PROOF-WHILE-BUSY',
+        file: 'src/js/recording-lock.js',
+        from: '    return held && holdDepth === 1 && !!lockTask;',
+        to: '    return held && !!lockTask;',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /recovery reads each recording.s beat/
+    },
+    {
+        id: 'MUT-STALE-FINALIZER-BLOCKS',
+        file: 'src/js/recorder.js',
+        from: '        if (rec.finalizerId && rec.finalizerId !== finalizerId && !otherTabsGone\n',
+        to: '        if (rec.finalizerId && rec.finalizerId !== finalizerId\n',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /so is one this same tab left before it was reloaded, finalizer and all/
+    },
+    {
+        id: 'MUT-STOP-RELEASES-FIRST',
+        file: 'src/js/recorder.js',
+        from: "        await secureInMemoryCapture();\n        mark('secured');\n",
+        to: "        mark('secured');\n",
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /everything held only in memory is on disk before the microphone is let go/
+    },
+    {
+        id: 'MUT-SECURE-SKIPS-AUDIO',
+        file: 'src/js/recorder.js',
+        from: '            await trackPendingFlush(flushPcmToDb(true, AppState.pcmLength));\n        }\n    } catch (err) {\n        console.warn(\'Could not save the latest audio ahead of time:\', err);',
+        to: '        }\n    } catch (err) {\n        console.warn(\'Could not save the latest audio ahead of time:\', err);',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /hiding the app stores the audio that was only in memory as the next piece/
+    },
+    {
+        id: 'MUT-SECURE-SKIPS-LIVE',
+        file: 'src/js/recorder.js',
+        from: '        if (await writeLiveTranscript(recId, live)) AppState.liveSnapshot = { at: Date.now(), ...sizeAndSignature };',
+        to: '        AppState.liveSnapshot = { at: Date.now(), ...sizeAndSignature };',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /and the live transcript with it, so a browser killed in the background takes neither/
+    },
+    {
+        id: 'MUT-SNAPSHOT-SHORT-WAITS',
+        file: 'src/js/capture-health-core.js',
+        from: '    if (Number(chars) <= LIVE_SNAPSHOT_SMALL_CHARS) return true;\n',
+        to: '',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /a live transcript of a few minutes is saved every minute it changed/
+    },
+    {
+        id: 'MUT-INTERRUPTION-NOT-NOTED',
+        file: 'src/js/recorder.js',
+        from: '                rec.interruption = interruption;\n',
+        to: '',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /it keeps that the app was closed while Stop was letting go of the microphone/
+    },
+    {
+        id: 'MUT-STOP-ENDED-AS-CLOSED',
+        file: 'src/js/capture-health-core.js',
+        from: "    if (beat.state !== 'finalizing' || beat.stopStep === STOP_ENDED) return null;",
+        to: "    if (beat.state !== 'finalizing') return null;",
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /a Stop that ended by itself without saving, a full disk say, is not reported as the app being closed/
+    },
+    {
+        id: 'MUT-INTERRUPTION-NOTE-HIDDEN',
+        file: 'src/js/gui.js',
+        from: '    ${captureWarningHtml}\n    ${interruptionHtml}\n',
+        to: '    ${captureWarningHtml}\n',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /says at which step, and offers ✕/
+    },
+    {
+        id: 'MUT-INTERRUPTION-DISMISS-NOT-STORED',
+        file: 'src/js/gui.js',
+        from: '        delete rec.interruption;\n        changed = true;',
+        to: '        changed = true;',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /interruption note: it is removed from the stored recording/
+    },
+    {
+        id: 'MUT-LOG-STEP-NOT-FLUSHED',
+        file: 'src/js/recorder.js',
+        from: '        return flushSystemLog();\n    };',
+        to: '        return Promise.resolve();\n    };',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the system log on disk already says Stop is letting go of the microphone/
+    },
+    {
+        id: 'MUT-LOG-CONSOLE-IGNORED',
+        file: 'src/js/debug-log.js',
+        from: "            try { systemLog.add(method === 'log' ? 'info' : method, 'console', stringifyArgs(args)); } catch (_) {}\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a console message lands in the log/
+    },
+    {
+        id: 'MUT-LOG-WARNING-WAITS',
+        file: 'src/js/debug-log.js',
+        from: "        if (normalLevel(level) !== 'info') { flush().catch(() => {}); return; }\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a warning is on disk at once/
+    },
+    {
+        id: 'MUT-LOG-CUT-OFF-UNREPORTED',
+        file: 'src/js/debug-log.js',
+        from: "                if (note) buffer.unshift({ t: now(), s: sessionId, l: 'warn', c: 'app', m: note });\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the next page load says the one before was cut off/
+    },
+    {
+        id: 'MUT-LOG-OPEN-TAB-REPORTED',
+        file: 'src/js/debug-log.js',
+        from: '            if (!gone) continue;\n',
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /nor one still open in another tab is reported as cut off/
+    },
+    {
+        id: 'MUT-LOG-NEVER-TRIMMED',
+        file: 'src/js/debug-log.js',
+        from: '        if (writesSinceTrim >= TRIM_EVERY_WRITES) {',
+        to: '        if (false) {',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /it keeps only the newest entries/
+    },
+    {
+        id: 'MUT-LOG-ERROR-STACK-DROPPED',
+        file: 'src/js/debug-log-core.js',
+        from: "        return frames.length ? `${head} (${frames.join(' ← ')})` : head;",
+        to: '        return head;',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /keeps an error's name, message and where it was thrown/
     },
 ];
