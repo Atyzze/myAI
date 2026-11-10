@@ -28,4 +28,4 @@ System log: `pure` checks how an error, an object and a long message read, the l
 
 Eighteen new mutation guards. For the log: a Stop step not waited for, console messages not taken, a warning waiting for the timer, a cut-off session not reported, an open tab reported as cut off, the log never trimmed, and an error losing where it was thrown. For the rest: the lock never proving anything, the lock proving it while this tab is busy, a dead finalizer blocking, Stop letting go before saving, the saving step skipping the audio or the live transcript, the short-transcript rule removed, the interruption not noted, a Stop that ended reported as a closed app, the note not shown, and ✕ not removing it. Two guards follow the beat's new `stopStep`.
 
-GATE_RESULT
+22 suites passed (strict gate) in 11 min 07 s; slowest mutation-guards (6 min 05 s)
