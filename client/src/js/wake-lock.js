@@ -1,3 +1,5 @@
+import { logEvent } from './debug-log.js';
+
 let _sentinel = null;
 let _wantLock = false;
 let _wired    = false;
@@ -15,11 +17,14 @@ async function requestSentinel() {
             return true;
         }
         _sentinel = sentinel;
+        logEvent('wake-lock', 'screen kept awake');
         sentinel.addEventListener('release', () => {
+            logEvent('wake-lock', _wantLock ? 'screen wake lock released by the browser' : 'screen wake lock released');
             if (_sentinel === sentinel) _sentinel = null;
         });
         return true;
-    } catch (_) {
+    } catch (err) {
+        logEvent('wake-lock', `screen wake lock refused: ${err && err.name ? `${err.name}: ${err.message}` : err}`, 'warn');
         return false;
     }
 }

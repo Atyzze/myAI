@@ -1546,6 +1546,11 @@ export function wireActionDelegation() {
             }
             case 'appUpdate': return window.appUpdate();
             case 'closeHelp': return window.closeHelp();
+            case 'openLogs': return window.openLogs();
+            case 'closeLogs': return window.closeLogs();
+            case 'copyLogs': return window.copyLogs();
+            case 'downloadLogs': return window.downloadLogs();
+            case 'clearLogs': return window.clearLogs();
             case 'closeSettings': return window.closeSettings();
             case 'refreshOllamaModels': return window.refreshOllamaModels();
             case 'refreshLoadedModels': return window.refreshLoadedModels();

@@ -2176,6 +2176,25 @@
         "MUT-INTERRUPTION-NOTE-HIDDEN",
         "MUT-INTERRUPTION-DISMISS-NOT-STORED"
       ]
+    },
+    {
+      "id": "SYSTEM-LOG-001",
+      "title": "The app keeps a system log on the device, in a database of its own and on from the first line it runs: every console message, uncaught error and change in the page's life, warnings at once, the newest entries only; the next page load reports one that was cut off without closing normally, with its last entry, but never one still open in another tab; Stop's steps are on disk before each begins; ❓ → 🧾 Open system logs shows it with Copy, Download and Clear",
+      "suites": [
+        "pure",
+        "app-behaviour",
+        "storage-paths",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-LOG-STEP-NOT-FLUSHED",
+        "MUT-LOG-CONSOLE-IGNORED",
+        "MUT-LOG-WARNING-WAITS",
+        "MUT-LOG-CUT-OFF-UNREPORTED",
+        "MUT-LOG-OPEN-TAB-REPORTED",
+        "MUT-LOG-NEVER-TRIMMED",
+        "MUT-LOG-ERROR-STACK-DROPPED"
+      ]
     }
   ],
   "untestedModules": []

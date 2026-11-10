@@ -4260,6 +4260,39 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
 }
 
 {
+    const { stringifyArgs, clampMessage, formatLogEntries, entriesToDrop, describeUnclosedSession,
+            LOG_MAX_MESSAGE_CHARS, normalLevel } = await import('../../src/js/debug-log-core.js');
+    const err = new TypeError('cannot read the thing');
+    err.stack = 'TypeError: cannot read the thing\n    at stopRecordingNow (recorder.js:1450:9)\n    at a\n    at b\n    at c\n    at d';
+    const text = stringifyArgs(['Stop failed:', err, { kind: 'quota' }, 3]);
+    ok(/^Stop failed: TypeError: cannot read the thing \(at stopRecordingNow \(recorder\.js:1450:9\) ← at a ← at b\) \{"kind":"quota"\} 3$/.test(text),
+       `system log: a console message keeps an error's name, message and where it was thrown, and objects as JSON (${text})`);
+    ok(clampMessage('x'.repeat(LOG_MAX_MESSAGE_CHARS + 50)).length < LOG_MAX_MESSAGE_CHARS + 40
+       && /50 more characters\)$/.test(clampMessage('x'.repeat(LOG_MAX_MESSAGE_CHARS + 50))),
+       'system log: a very long message is cut, saying how much was left out');
+    ok(normalLevel('warning') === 'warn' && normalLevel('debug') === 'info' && normalLevel('error') === 'error',
+       'system log: every entry is info, warn or error');
+    const lines = formatLogEntries([
+        { t: Date.UTC(2026, 10, 10, 11, 0, 0, 5), s: 'aaaaaaaa-1', l: 'info', c: 'app', m: 'started' },
+        { t: Date.UTC(2026, 10, 10, 11, 0, 1), s: 'aaaaaaaa-1', l: 'warn', c: 'stop', m: 'step releasing' },
+        { t: Date.UTC(2026, 10, 10, 11, 5, 0), s: 'bbbbbbbb-2', l: 'error', c: 'page', m: 'Uncaught' }
+    ]).split('\n');
+    ok(lines.length === 5 && /session aaaaaaaa/.test(lines[0]) && /\.005  INFO   \[app\] started$/.test(lines[1])
+       && /WARN   \[stop\] step releasing$/.test(lines[2]) && /session bbbbbbbb/.test(lines[3]) && /ERROR  \[page\] Uncaught$/.test(lines[4]),
+       `system log: entries read oldest first, one line each with time, level and what they are about, a line between page loads (${lines.join(' | ')})`);
+    ok(entriesToDrop(5200, 5000) === 200 && entriesToDrop(10, 5000) === 0, 'system log: only the oldest entries past the limit are dropped');
+    const cutOff = { id: 's1', build: '143', startedAt: Date.UTC(2026, 10, 10, 11, 0), lastAt: Date.UTC(2026, 10, 10, 11, 4), visibility: 'visible' };
+    const lastEntry = { t: Date.UTC(2026, 10, 10, 11, 4), c: 'stop', m: 'recording 7: releasing (letting go of the microphone and the encoder)' };
+    const note = describeUnclosedSession(cutOff, lastEntry);
+    ok(/build 143/.test(note) && /ended without the page closing normally/.test(note)
+       && /\[stop\] recording 7: releasing/.test(note) && /on screen then, so the browser most likely crashed/.test(note),
+       `system log: a session that never said it was ending is reported with its last entry, and on screen means a crash (${note})`);
+    ok(/in the background then/.test(describeUnclosedSession({ ...cutOff, visibility: 'hidden' }, lastEntry))
+       && describeUnclosedSession({ ...cutOff, endedAt: Date.now() }, lastEntry) === '',
+       'system log: in the background it was likelier ended by the phone, and a session that closed normally is not reported');
+}
+
+{
     const { releaseReviewAudioOfWaitingWindows, queuedWindowBytes, capRetryQueue, REVIEW_AUDIO_KEPT_WINDOWS } =
         await import('../../src/js/live-scribe-core.js');
     const windowItem = index => {

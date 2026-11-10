@@ -1072,6 +1072,34 @@ try {
        `hiding the app during a recording stores the audio recorded since the last piece right away (${JSON.stringify(hidden)})`);
     await stopRecording(app, hiddenRec);
 
+    journey('❓ → 🧾 Open system logs shows what the app did, Stop\'s steps included, and Escape closes it');
+    await app.evaluate(`document.getElementById('helpBtn').click(); true`, { userGesture: true });
+    await app.evaluate(`document.getElementById('help-logs-btn').click(); true`, { userGesture: true });
+    await waitFor(app, `document.getElementById('logsOverlay')?.classList.contains('open')
+        && (document.getElementById('logsText')?.textContent || '').length > 0`, 10000);
+    const logView = await app.evaluate(`(() => {
+        const text = document.getElementById('logsText')?.textContent || '';
+        const stopLines = text.split('\\n').filter(line => line.includes('[stop] recording ${hiddenRec}: '));
+        return {
+            stopPressed: text.includes('Stop pressed: recording ${hiddenRec}'),
+            started: /\\[app\\] started · build \\d+ · /.test(text),
+            steps: ['securing', 'releasing', 'noting', 'closing', 'saving']
+                .filter(step => stopLines.some(line => line.includes(': ' + step + ' ('))),
+            capturing: text.includes('[recorder] recording ${hiddenRec} capturing'),
+            hidden: text.includes('recording ${hiddenRec}: saving what is held in memory now'),
+            status: document.getElementById('logsStatus')?.textContent || '',
+            tail: text.split('\\n').slice(-6)
+        };
+    })()`);
+    ok(logView.stopPressed && logView.started && logView.capturing && logView.steps.length === 5 && logView.hidden,
+       `the system log shows how the app started, the recording, its save on hiding and every step of its Stop (${JSON.stringify(logView)})`);
+    ok(/\d+ entr/.test(logView.status) && !/only in memory/.test(logView.status),
+       `and it is kept in its own database, not only in memory (${logView.status})`);
+    await pressKey(app, 'Escape');
+    const logsClosed = await app.evaluate(`!document.getElementById('logsOverlay').classList.contains('open')`);
+    ok(logsClosed, 'Escape closes the system log');
+    await app.evaluate(`window.closeHelp(); true`);
+
     journey('Silence is marked in the timestamped reading but never handed to the model as speech');
     const silentId = await app.evaluate(`(async () => {
         const { dbExec, commitAudio } = await import('/src/js/db.js');

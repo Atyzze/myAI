@@ -14,10 +14,17 @@ The modules under `src/js/` are intentionally kept in one directory. Broad respo
 
 - capture and audio: `recorder.js`, `audio.js`, `audio-format.js`, `webm-duration.js`, `wake-lock.js`;
 - durable local state: `db.js`, `idb-min.js`, `retention-core.js`, `backup-core.js`, `recording-lock.js`;
+- the system log: `debug-log.js`, `debug-log-core.js`, `system-log-boot.js`, `logs-view.js`;
 - transcription: `transcribe.js`, `transcribe-core.js`, `live-scribe.js`, `live-scribe-core.js`, `live-refine-core.js`;
 - speaker/language processing: `diarize-core.js`, `speaker-infer-core.js`, `speaker-confirm-core.js`, `translate-core.js`;
 - replies and automation: `reply.js`, `reply-core.js`, `auto-pipeline.js`, `jobs.js`;
 - UI: `main.js`, `gui.js`, `row-state-core.js`, `settings.js`, `help.js`, `live-render.js`, `live-inline.js`, `live-tabs.js`, `player-core.js`, `clipboard-core.js`. `live-view.js` is kept on the server only for pop-ups of Build 128 tabs still open when a newer build is deployed; nothing of this build loads it.
+
+## System log
+
+The app runs as an installed web app with no address bar and no console to open, so it keeps its own log (Build 143). `system-log-boot.js` is the first module `main.js` imports, so the log is listening before any other module runs a line. It takes every console message, every uncaught error and rejected promise, and every change in the page's life (hidden, shown, frozen, resumed, closing, online, offline, a new service worker), plus events the app logs itself with `logEvent`: a recording starting and capturing, the microphone's settings, mute and end, the audio context's state, the screen wake lock, the database connection, recovery, and every step of Stop with the page's memory where the browser reports it.
+
+Entries go to a database of their own, `myai-system-log` (`debug-log.js`), so logging never takes part in, waits for or slows down a write of a recording. They are buffered and written about once a second; a warning or an error is written at once, and Stop waits, for at most 400 ms, until the step it is about to take is on disk. The newest 5,000 entries are kept. Each page load is a session that holds a Web Lock named after it for as long as it lives; the next page load reports a session whose lock is gone and that never said it was ending (no `pagehide`), with the last thing it logged and whether the app was on screen at the time, which tells a crash from a phone that ended the browser in the background. A session still open in another tab is never reported. ❓ → 🧾 Open system logs (`logs-view.js`) shows the log as text, oldest first, with Copy, Download and Clear.
 
 ## Local database
 

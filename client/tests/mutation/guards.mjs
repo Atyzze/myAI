@@ -3934,4 +3934,60 @@ export const mutations = [
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /interruption note: it is removed from the stored recording/
     },
+    {
+        id: 'MUT-LOG-STEP-NOT-FLUSHED',
+        file: 'src/js/recorder.js',
+        from: '        return flushSystemLog();\n    };',
+        to: '        return Promise.resolve();\n    };',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the system log on disk already says Stop is letting go of the microphone/
+    },
+    {
+        id: 'MUT-LOG-CONSOLE-IGNORED',
+        file: 'src/js/debug-log.js',
+        from: "            try { systemLog.add(method === 'log' ? 'info' : method, 'console', stringifyArgs(args)); } catch (_) {}\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a console message lands in the log/
+    },
+    {
+        id: 'MUT-LOG-WARNING-WAITS',
+        file: 'src/js/debug-log.js',
+        from: "        if (normalLevel(level) !== 'info') { flush().catch(() => {}); return; }\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a warning is on disk at once/
+    },
+    {
+        id: 'MUT-LOG-CUT-OFF-UNREPORTED',
+        file: 'src/js/debug-log.js',
+        from: "                if (note) buffer.unshift({ t: now(), s: sessionId, l: 'warn', c: 'app', m: note });\n",
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the next page load says the one before was cut off/
+    },
+    {
+        id: 'MUT-LOG-OPEN-TAB-REPORTED',
+        file: 'src/js/debug-log.js',
+        from: '            if (!gone) continue;\n',
+        to: '',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /nor one still open in another tab is reported as cut off/
+    },
+    {
+        id: 'MUT-LOG-NEVER-TRIMMED',
+        file: 'src/js/debug-log.js',
+        from: '        if (writesSinceTrim >= TRIM_EVERY_WRITES) {',
+        to: '        if (false) {',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /it keeps only the newest entries/
+    },
+    {
+        id: 'MUT-LOG-ERROR-STACK-DROPPED',
+        file: 'src/js/debug-log-core.js',
+        from: "        return frames.length ? `${head} (${frames.join(' ← ')})` : head;",
+        to: '        return head;',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /keeps an error's name, message and where it was thrown/
+    },
 ];

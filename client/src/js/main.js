@@ -1,3 +1,4 @@
+import './system-log-boot.js';
 import { calcTotalStorage, cleanupOrphanWavChunks, cleanupOrphanAudio,
          cleanupOrphanLiveTranscripts, cleanupOrphanCaptureBeats, requestPersistentStorage,
          setDatabaseBusyCheck, setDatabaseGuardListener, noteDatabaseIdle } from './db.js';
@@ -18,6 +19,8 @@ import { openSettings, closeSettings, exposeSettingsGlobals,
 import { renderList, resetListToFirstPage, wireActionDelegation, isConverting } from './gui.js';
 import { cancelAllForRec, hasAnyJob }          from './jobs.js';
 import { openHelp, closeHelp, exposeHelpGlobals } from './help.js';
+import { exposeLogsGlobals, closeLogs, logsOpen } from './logs-view.js';
+import { logEvent } from './debug-log.js';
 import { paintAppVersion, exposeUpdateGlobals, setUpdateBusyCheck } from './version.js';
 import { loadBoxCapabilities } from './capabilities.js';
 import { getActiveRecordingLease, isLeaseOwnedByThisTab, subscribeRecordingLease,
@@ -29,6 +32,7 @@ setSettingsRenderList(renderList);
 
 exposeSettingsGlobals();
 exposeHelpGlobals();
+exposeLogsGlobals();
 window.cancelRecJob = cancelAllForRec;
 window.retryFinalizeRec = async (recId) => {
     try { await retryFinalizeRecording(Number(recId)); }
@@ -91,6 +95,8 @@ setDatabaseGuardListener((state, { recording, busy }) => {
     const node = document.getElementById('storage-alert');
     if (!node) return;
     const text = describeConnectionGuard(state, { recording, busy });
+    logEvent('database', `connection ${state}${recording ? ' while recording' : busy ? ' while busy' : ''}${text ? `: ${text}` : ''}`,
+             state === 'open' ? 'info' : 'warn');
     if (text) {
         node.dataset.owner = 'guard';
         node.textContent = text;
@@ -344,8 +350,12 @@ document.getElementById('helpBtn').onclick = openHelp;
 document.getElementById('helpOverlay').onclick = (e) => {
     if (e.target === e.currentTarget) closeHelp();
 };
+document.getElementById('logsOverlay').onclick = (e) => {
+    if (e.target === e.currentTarget) closeLogs();
+};
 
 function activeDialogPanel() {
+    if (logsOpen()) return document.getElementById('logsPanel');
     if (document.getElementById('pasteOverlay').classList.contains('open')) return document.getElementById('pastePanel');
     if (document.getElementById('settingsOverlay').classList.contains('open')) return document.getElementById('settingsPanel');
     if (document.getElementById('helpOverlay').classList.contains('open')) return document.getElementById('helpPanel');
@@ -358,7 +368,8 @@ document.addEventListener('keydown', event => {
     if (event.key === 'Escape') {
         if (panel.id === 'pastePanel') return;
         event.preventDefault();
-        if (panel.id === 'settingsPanel') closeSettings(); else closeHelp();
+        if (panel.id === 'logsPanel') closeLogs();
+        else if (panel.id === 'settingsPanel') closeSettings(); else closeHelp();
         return;
     }
     if (event.key !== 'Tab') return;

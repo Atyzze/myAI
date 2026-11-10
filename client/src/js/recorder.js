@@ -11,7 +11,8 @@ import { initialCaptureHealth, nextCaptureHealth, captureHealthTransition,
          shouldTryResume, describeCaptureStall, describeCaptureRecovery,
          capturedMs, opusLengthMs, samplesBeforeTap, heartbeatRowDue, liveSnapshotDue, captureBeatRecord,
          CAPTURE_STALL_MS, captureStallMs, meterLevel, nextAutoGain, LIMITER_SETTINGS,
-         interruptionFromBeat, describeInterruption, STOP_ENDED } from './capture-health-core.js';
+         interruptionFromBeat, describeInterruption, STOP_ENDED, STOP_STEPS } from './capture-health-core.js';
+import { logEvent, flushSystemLog, describeMemory } from './debug-log.js';
 import { storageRunway, sessionRunway,
          describeRunway, describeRunwayAlert, runwayTone,
          nextRunwayAlert } from './runway-core.js';
@@ -337,7 +338,20 @@ async function initAudioStream() {
     AppState.stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
     });
+    const ctxForLog = AppState.audioCtx;
+    try {
+        ctxForLog.addEventListener('statechange', () => logEvent('recorder', `audio context ${ctxForLog.state}`,
+                                                                  ctxForLog.state === 'running' || ctxForLog.state === 'closed' ? 'info' : 'warn'));
+    } catch (_) {}
     for (const track of AppState.stream.getAudioTracks()) {
+        try {
+            const settings = typeof track.getSettings === 'function' ? track.getSettings() : {};
+            logEvent('recorder', `microphone: ${settings.sampleRate || '?'} Hz, ${settings.channelCount || '?'} channel(s)`
+                + `${track.muted ? ', muted' : ''}, ${track.readyState}`);
+        } catch (_) {}
+        track.addEventListener('ended', () => logEvent('recorder', 'microphone track ended', AppState.captureStopping ? 'info' : 'warn'));
+        track.addEventListener('mute', () => logEvent('recorder', 'microphone muted by the browser or the system', 'warn'));
+        track.addEventListener('unmute', () => logEvent('recorder', 'microphone unmuted'));
         track.addEventListener('ended', () => {
             if (AppState.recId != null && !AppState.captureStopping) {
                 handleCaptureFailure(new Error('Microphone input ended unexpectedly.'), 'microphone');
@@ -1150,6 +1164,8 @@ export async function recoverIncompleteRecordings({ retryFailed = true } = {}) {
                 deferred++;
                 continue;
             }
+            logEvent('recovery', `recovering recording ${rec.id} (${rec.captureState}, beat ${beat ? `${beat.state}${beat.stopStep ? ` at ${beat.stopStep}` : ''}` : 'none'}`
+                + `${otherTabsGone ? ', no other tab holds the lock' : ''})`);
             rec.durationMs = await absorbCaptureBeat(rec.id, beat, rec.durationMs || 0);
             let heartbeat = setInterval(
                 () => touchFinalizer(rec.id, finalizerId).catch(() => {}),
@@ -1171,6 +1187,7 @@ export async function recoverIncompleteRecordings({ retryFailed = true } = {}) {
                 if (settled) deleteCaptureBeat(rec.id).catch(() => {});
             }
         }
+        if (recovered || deferred) logEvent('recovery', `${recovered} recovered, ${deferred} left for later, of ${pending.length} unfinished`);
         return { recovered, deferred };
     } finally {
         await releaseRecordingLock();
@@ -1250,6 +1267,7 @@ export function secureRecordingNow() {
     if (AppState.recId == null || !AppState.startTime || AppState.busy || AppState.captureStopping) {
         return Promise.resolve();
     }
+    logEvent('recorder', `recording ${AppState.recId}: saving what is held in memory now`);
     return secureRecordingOnce();
 }
 
@@ -1368,6 +1386,8 @@ export async function startRecording({ live = false } = {}) {
 
         AppState.recId = await dbExec(CONFIG.STORE_REC, 'add', recObj);
         orphanId = AppState.recId;
+        logEvent('recorder', `recording ${AppState.recId} starting: ${chosen.format}${chosen.mime ? ` (${chosen.mime})` : ''}, `
+            + `${AppState.audioCtx.sampleRate} Hz, live transcription ${AppState.liveScribe ? 'on' : 'off'}`);
         announceRecordingState();
         publishRecordingLease(AppState.recId, now, AppState.sessionId, 0);
         AppState.rowBeat = null;
@@ -1381,6 +1401,7 @@ export async function startRecording({ live = false } = {}) {
         await initAudioStream();
         if (AppState.captureError) throw new Error(AppState.captureError.message || 'Audio capture failed during startup.');
         AppState.startTime = Date.now();
+        logEvent('recorder', `recording ${AppState.recId} capturing (${AppState.recFormat}${AppState.workletNode ? ', audio tap on' : ''})`);
         AppState.graphStartSec = AppState.audioCtx.currentTime;
         AppState.samplesSeen = 0;
         AppState.captureProgress = 0;
@@ -1450,10 +1471,20 @@ async function stopRecordingNow() {
     // The step Stop has reached, on every beat it writes, so recovery can tell where a browser that
     // died during Stop left it. Each step is on disk before the step begins.
     let stopStep = 'securing';
+    // The system log gets the step too, with how much memory the page holds, and Stop waits until
+    // both are on disk (the log for at most a moment) before it begins the step.
+    const logStep = step => {
+        const memory = describeMemory();
+        logEvent('stop', `recording ${currentId}: ${step} (${STOP_STEPS[step] || step})${memory ? ` · ${memory}` : ''}`);
+        return flushSystemLog();
+    };
     const reachStep = step => {
         stopStep = step;
-        return persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
-                                     { captureFlags: stopFlags, stopStep }).catch(() => {});
+        return Promise.all([
+            persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
+                                  { captureFlags: stopFlags, stopStep }).catch(() => {}),
+            logStep(step)
+        ]);
     };
 
     const began = Date.now();
@@ -1461,6 +1492,8 @@ async function stopRecordingNow() {
     const phases = [];
     const mark = name => { const now = Date.now(); phases.push(`${name} ${now - lastMark}ms`); lastMark = now; };
 
+    logEvent('stop', `Stop pressed: recording ${currentId}, ${currentFormat}, ${Math.round(finalDuration / 1000)} s`
+        + `${AppState.liveScribe ? ', live transcription on' : ''}${failure ? `, after ${failure.kind} error` : ''}`);
     await reachStep('securing');
     finalizationHeartbeat = setInterval(
         () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
@@ -1550,8 +1583,11 @@ async function stopRecordingNow() {
         mark('live transcript');
 
         stopStep = 'closing';
-        await persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
-                                    { force: true, captureFlags: stopFlags, stopStep });
+        await Promise.all([
+            persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
+                                  { force: true, captureFlags: stopFlags, stopStep }),
+            logStep(stopStep)
+        ]);
 
         AppState.savingId = currentId;
         cleanupRecordingState();
@@ -1596,7 +1632,8 @@ async function stopRecordingNow() {
         try { await _renderList(); }
         catch (renderErr) { console.error('Final recording repaint failed:', renderErr); }
         mark('final repaint');
-        console.info(`Stop took ${Date.now() - began}ms: ${phases.join(', ')}`);
+        console.info(`Stop took ${Date.now() - began}ms: ${phases.join(', ')}`
+            + (finalizationError ? ` · ended without saving: ${finalizationError.message || finalizationError}` : ''));
     }
 
     const reason = failure?.kind === 'quota'

@@ -8,6 +8,10 @@ myAI does not offer a separate "Transient session" switch. For a browser-managed
 
 A database schema change keeps stored data: upgrades only add what the new layout needs. Deletion happens only when you delete something, when automatic retention removes it, or when the browser clears site data.
 
+## System log
+
+The app keeps a log of what it does in a database of its own on the device (Build 143), so a crash or anything odd can be looked into afterwards from ❓ → 🧾 Open system logs. It records events, timings, error messages and the browser's description of itself (its user-agent string, screen, memory and storage), and since it takes console messages it can hold short snippets of text the app was working on, such as the first words of a translation it received. It is never sent anywhere: it leaves the device only when it is copied or downloaded, and Clear in the log view empties it. Clearing site data deletes it with everything else.
+
 ## Transcription boundary
 
 The browser posts bounded 16 kHz mono PCM WAV data directly to `/transcribe`. There is no multipart upload field, no `store_backup` field and no client setting capable of requesting server retention.

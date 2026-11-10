@@ -525,6 +525,8 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     await clearAll();
     CONFIG.RECORDING_HEARTBEAT_MS = 40;
     const scribe = await import('../../src/js/live-scribe.js');
+    const debugLog = await import('../../src/js/debug-log.js');
+    await debugLog.installSystemLog({ build: 'test' });
     const ownerId = lock.getRecordingOwnerId();
     ok(await lock.acquireRecordingLock(), 'secure: the test tab holds the recording lock, as a recording tab does');
     const t0 = Date.now() - 20000;
@@ -547,7 +549,9 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
                 pieces: memoryIdb.rows('audio_fragments').filter(piece => piece.recId === id).map(piece => piece.seq),
                 live: memoryIdb.rows('live_transcripts').some(row => row.recId === id
                     && row.live.lines.some(line => /before the browser died/.test(line.text))),
-                step: (memoryIdb.rows('capture_beats').find(beat => beat.recId === id) || {}).stopStep
+                step: (memoryIdb.rows('capture_beats').find(beat => beat.recId === id) || {}).stopStep,
+                logged: memoryIdb.rows('entries', debugLog.LOG_DB_NAME)
+                    .some(entry => entry.c === 'stop' && new RegExp(`recording ${id}: releasing \\(`).test(entry.m))
             };
         } }] }
     });
@@ -574,6 +578,8 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     globalThis.fetch = realFetch;
     ok(atRelease && atRelease.pieces.includes(3) && atRelease.live && atRelease.step === 'releasing',
        `stop: everything held only in memory is on disk before the microphone is let go, and the beat names that step (${JSON.stringify(atRelease)})`);
+    ok(atRelease && atRelease.logged,
+       `stop: and the system log on disk already says Stop is letting go of the microphone, so a browser that dies there leaves that behind (${JSON.stringify(atRelease)})`);
     const saved = await row(id);
     ok(saved && !saved.processing && Math.abs(saved.durationMs - 11000) <= 50,
        `stop: and the saved recording holds all of it, 4 + 4 + 2 + 1 seconds (${saved && saved.durationMs} ms)`);
