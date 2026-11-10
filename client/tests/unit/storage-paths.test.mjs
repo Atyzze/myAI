@@ -451,7 +451,8 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
             const current = await row(id).catch(() => null);
             if (current && current.processing) beforeSaved = current;
             const beat = (await db.readCaptureBeats()).get(id);
-            if (beat && beat.stopStep === 'saving') beatsWhileSaving.push(beat);
+            // From 'closing' on, the recording's own state is torn down and the beat's flags come from Stop.
+            if (beat && ['closing', 'saving', 'ended'].includes(beat.stopStep)) beatsWhileSaving.push(beat);
             await new Promise(resolve => setTimeout(resolve, 5));
         }
     })();
