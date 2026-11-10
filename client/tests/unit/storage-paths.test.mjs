@@ -316,6 +316,9 @@ async function clearAll() {
 }
 
 {
+    // This tab holds the recording lock for work of its own, as it does while it records, so the lock
+    // says nothing about other tabs and their beats decide.
+    ok(await lock.acquireRecordingLock(), 'recovery: this tab holds the recording lock for work of its own');
     const now = Date.now();
     const other = 'another-tab';
     for (let i = 0; i < 3; i++) await addRecording({ filename: `finished ${i}` }, { audio: wav(1) });
@@ -334,6 +337,63 @@ async function clearAll() {
        `recovery: startup looks up unfinished recordings through the capture-state index, never by reading every recording (${JSON.stringify(recordingReads)})`);
     ok(outcome.deferred === 2 && (await row(capturing)).processing && (await row(retrying)).processing,
        `recovery: recovery reads each recording's beat, so one another tab is still capturing, or still saving again after a failed save, is left alone although its row looks stale (${JSON.stringify(outcome)})`);
+    await lock.releaseRecordingLock();
+    await clearAll();
+}
+
+{
+    // The browser died during Stop a moment ago: the recording's row, beat and lease are all fresh,
+    // and its beat says which step of Stop it had reached. Nothing holds the recording lock any more.
+    const now = Date.now();
+    const gone = 'a-tab-that-died';
+    const id = await addRecording({ processing: true, captureState: 'finalizing', ownerId: gone, sessionId: 'died',
+                                    heartbeatAt: now, durationMs: 2000 },
+                                  { fragments: [{ seq: 0, blob: wav(1) }, { seq: 1, blob: wav(1) }] });
+    await db.writeCaptureBeat({ recId: id, ownerId: gone, sessionId: 'died', heartbeatAt: now, state: 'finalizing',
+                                durationMs: 2000, stopStep: 'releasing' });
+    localStorage.setItem(lock.RECORDING_LEASE_KEY, JSON.stringify({ ownerId: gone, recId: id, sessionId: 'died', durationMs: 2000, heartbeatAt: now }));
+    const outcome = await recorder.recoverIncompleteRecordings();
+    localStorage.removeItem(lock.RECORDING_LEASE_KEY);
+    const saved = await row(id);
+    ok(outcome.recovered === 1 && saved && !saved.processing && saved.audioBytes > 0 && !!(await db.readAudio(id)),
+       `recovery: a recording whose browser died during Stop a moment ago is recovered as soon as the app opens again, not once its heartbeat has gone stale: nothing holds the recording lock, so no tab is still at work on it (${JSON.stringify(outcome)})`);
+    ok(saved.interruption && saved.interruption.during === 'stop' && saved.interruption.step === 'releasing',
+       `recovery: and it keeps that the app was closed while Stop was letting go of the microphone (${JSON.stringify(saved.interruption)})`);
+    ok(!(await db.readCaptureBeats()).has(id), 'recovery: its beat goes once it is saved');
+    await clearAll();
+}
+
+{
+    // The page that died was this same tab before a reload: same owner, and a recovery of its own
+    // that was cut short left a fresh finalizer on the row.
+    const now = Date.now();
+    const ownerId = lock.getRecordingOwnerId();
+    const id = await addRecording({ processing: true, captureState: 'recording', ownerId, sessionId: 'before-reload',
+                                    heartbeatAt: now, durationMs: 1000,
+                                    finalizerId: `${ownerId}:cut-short`, finalizerHeartbeatAt: now },
+                                  { fragments: [{ seq: 0, blob: wav(1) }] });
+    await db.writeCaptureBeat({ recId: id, ownerId, sessionId: 'before-reload', heartbeatAt: now, state: 'recording', durationMs: 1000 });
+    const outcome = await recorder.recoverIncompleteRecordings();
+    const saved = await row(id);
+    ok(outcome.recovered === 1 && saved && !saved.processing && saved.audioBytes > 0
+       && saved.interruption && saved.interruption.during === 'recording',
+       `recovery: so is one this same tab left before it was reloaded, finalizer and all, and it says it was closed while recording (${JSON.stringify(outcome)})`);
+    await clearAll();
+}
+
+{
+    // Another tab is alive and holds the lock: whatever the rows say, this tab touches nothing.
+    const now = Date.now();
+    const id = await addRecording({ processing: true, captureState: 'recording', ownerId: 'live-tab', sessionId: 'live',
+                                    heartbeatAt: now - 5 * MINUTE }, { fragments: [{ seq: 0, blob: wav(1) }] });
+    let releaseOtherTab = null;
+    const otherTab = navigator.locks.request('myai-active-recording', () => new Promise(resolve => { releaseOtherTab = resolve; }));
+    await settle();
+    const outcome = await recorder.recoverIncompleteRecordings();
+    ok(outcome.recovered === 0 && outcome.deferred === 1 && (await row(id)).processing && (await fragmentsOf(id)) === 1,
+       `recovery: while another tab holds the recording lock, a recording is left to it, however stale its row looks (${JSON.stringify(outcome)})`);
+    releaseOtherTab();
+    await otherTab;
     await clearAll();
 }
 
@@ -384,11 +444,14 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
                                               commitDelayMs);
     page.answer(false);
     let beforeSaved = null;
+    const beatsWhileSaving = [];
     let watching = true;
     const watch = (async () => {
         while (watching) {
             const current = await row(id).catch(() => null);
             if (current && current.processing) beforeSaved = current;
+            const beat = (await db.readCaptureBeats()).get(id);
+            if (beat && beat.stopStep === 'saving') beatsWhileSaving.push(beat);
             await new Promise(resolve => setTimeout(resolve, 5));
         }
     })();
@@ -401,15 +464,17 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     await memoryIdb.idle();
     stopFailing();
     await settle();
-    return { id, beforeSaved };
+    return { id, beforeSaved, beatsWhileSaving };
 }
 
 {
     let rowWrites = 0;
     const fullDisk = op => (op.store === 'recordings' && op.action === 'put')
                         || (op.store === 'audio_fragments' && op.action === 'add');
-    const { id } = await stopRecordingWith({ captureError: { kind: 'quota', message: 'Injected full disk' }, unsaved: true,
-                                              commitDelayMs: 300, failing: fullDisk });
+    const { id, beatsWhileSaving } = await stopRecordingWith({ captureError: { kind: 'quota', message: 'Injected full disk' }, unsaved: true,
+                                                                commitDelayMs: 300, failing: fullDisk });
+    ok(beatsWhileSaving.length > 0 && beatsWhileSaving.every(beat => beat.captureError && beat.captureError.kind === 'quota' && beat.incompleteAudio === true),
+       `stop: through a slow save on a full disk, the beat still says capture failed and audio is missing on every write (${beatsWhileSaving.length} seen)`);
     const beat = (await db.readCaptureBeats()).get(id);
     ok(beat && beat.captureError && beat.captureError.kind === 'quota' && beat.incompleteAudio === true,
        `stop: when the disk stays full through a slow save, the beat still says capture failed and audio is missing (${JSON.stringify(beat && { error: beat.captureError, incomplete: beat.incompleteAudio })})`);
@@ -433,6 +498,8 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     ok(recovered && recovered.captureState === 'ready-incomplete' && recovered.incompleteAudio && recovered.captureError
        && / \(incomplete\)$/.test(recovered.filename),
        `stop: so once there is room again the recording is recovered marked incomplete, with the error it met (${recovered && recovered.captureState} ${recovered && recovered.filename})`);
+    ok(recovered && !recovered.interruption,
+       `stop: and its row does not say the app was closed under it, since its Stop ended by itself (${JSON.stringify(recovered && recovered.interruption)})`);
 }
 
 {
@@ -448,6 +515,67 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     ok(saved.endedAt >= Date.now() - 5000 && saved.durationMs < 10000,
        `stop: it remembers when it stopped, a minute after it started, although only ${saved.durationMs} ms of audio were saved, so automatic deletion counts from then`);
     ok(!(await db.readCaptureBeats()).has(id), 'stop: and its beat is gone once it is saved');
+    await lock.releaseRecordingLock();
+}
+
+{
+    // A recording with live transcription and two seconds of audio still in memory: hiding the app
+    // puts both on disk, and Stop does so before it lets go of the microphone.
+    await clearAll();
+    CONFIG.RECORDING_HEARTBEAT_MS = 40;
+    const scribe = await import('../../src/js/live-scribe.js');
+    const ownerId = lock.getRecordingOwnerId();
+    ok(await lock.acquireRecordingLock(), 'secure: the test tab holds the recording lock, as a recording tab does');
+    const t0 = Date.now() - 20000;
+    const id = await addRecording({ timestamp: t0, durationMs: 0, processing: true, captureState: 'recording',
+                                    ownerId, sessionId: 's-secure', heartbeatAt: Date.now(), sampleRate: 8000 },
+                                  { fragments: [{ seq: 0, blob: wav(4) }, { seq: 1, blob: wav(4) }] });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async () => ({ ok: true, status: 200, async json() {
+        return { text: 'said before the browser died', language: 'en',
+                 segments: [{ start: 0.5, end: 2.5, text: 'said before the browser died' }] };
+    } });
+    let atRelease = null;
+    Object.assign(recorder.AppState, {
+        recId: id, sessionId: 's-secure', startTime: t0, recFormat: 'wav', busy: false, captureStopping: false, ownerId,
+        audioCtx: { sampleRate: 8000, state: 'running', close() {} }, samplesSeen: 8000 * 8, wavSeq: 2,
+        pcmBuffer: [], pcmLength: 0, rowBeat: { recId: id, state: 'recording', at: Date.now() }, mediaRecorder: null,
+        stream: { getTracks: () => [{ stop() {
+            if (atRelease) return;
+            atRelease = {
+                pieces: memoryIdb.rows('audio_fragments').filter(piece => piece.recId === id).map(piece => piece.seq),
+                live: memoryIdb.rows('live_transcripts').some(row => row.recId === id
+                    && row.live.lines.some(line => /before the browser died/.test(line.text))),
+                step: (memoryIdb.rows('capture_beats').find(beat => beat.recId === id) || {}).stopStep
+            };
+        } }] }
+    });
+    ok(await recorder.setLiveTranscription(true), 'secure: live transcription runs for the recording');
+    for (let i = 0; i < 100 && !(scribe.liveScribeResult()?.lines.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    ok(scribe.liveScribeResult()?.lines.length > 0, 'secure: and has heard the audio recorded so far');
+    ok(!(await liveOf(id)), 'secure: the live transcript is not on disk yet');
+
+    recorder.AppState.pcmBuffer = [new Float32Array(8000 * 2).fill(0.3)];
+    recorder.AppState.pcmLength = 8000 * 2;
+    await recorder.secureRecordingNow();
+    const pieces = (await db.getAudioFragmentsForRecording(id)).sort((a, b) => a.seq - b.seq);
+    ok(pieces.length === 3 && pieces[2].seq === 2 && recorder.AppState.pcmLength === 0,
+       `secure: hiding the app stores the audio that was only in memory as the next piece (${pieces.map(piece => piece.seq)})`);
+    ok((await liveOf(id))?.lines.some(line => /before the browser died/.test(line.text)),
+       'secure: and the live transcript with it, so a browser killed in the background takes neither');
+
+    recorder.AppState.pcmBuffer = [new Float32Array(8000).fill(0.3)];
+    recorder.AppState.pcmLength = 8000;
+    page.answer(false);
+    await recorder.stopRecording();
+    await memoryIdb.idle();
+    await settle();
+    globalThis.fetch = realFetch;
+    ok(atRelease && atRelease.pieces.includes(3) && atRelease.live && atRelease.step === 'releasing',
+       `stop: everything held only in memory is on disk before the microphone is let go, and the beat names that step (${JSON.stringify(atRelease)})`);
+    const saved = await row(id);
+    ok(saved && !saved.processing && Math.abs(saved.durationMs - 11000) <= 50,
+       `stop: and the saved recording holds all of it, 4 + 4 + 2 + 1 seconds (${saved && saved.durationMs} ms)`);
     await lock.releaseRecordingLock();
 }
 

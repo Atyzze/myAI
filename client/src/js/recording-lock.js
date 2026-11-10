@@ -57,6 +57,16 @@ export function getRecordingOwnerId() { return tabId; }
 
 export function holdsRecordingLock() { return held; }
 
+// A tab holds the recording lock for as long as it records, saves, recovers or deletes a recording,
+// and with Web Locks the browser lets it go the moment that tab is gone: closed, crashed or killed
+// with the browser. So while this tab holds it through Web Locks, and nothing else in this tab holds
+// it too, no other tab is working on any recording: one still marked unfinished was left by a tab
+// that is gone, however fresh its heartbeat looks (Build 143). The localStorage fallback proves
+// nothing of the kind, so there the heartbeat still decides.
+export function lockProvesOtherTabsGone() {
+    return held && holdDepth === 1 && !!lockTask;
+}
+
 export function readRecordingLease() {
     try {
         const raw = localStorage.getItem(RECORDING_LEASE_KEY);

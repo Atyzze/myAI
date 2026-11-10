@@ -2124,6 +2124,58 @@
         "MUT-CAPTURE-DISMISS-NOT-STORED",
         "MUT-CAPTURE-DISMISS-MISSING"
       ]
+    },
+    {
+      "id": "RECOVERY-OWNER-GONE-001",
+      "title": "A recording left by a tab that is gone, closed, crashed or killed with its browser, is recovered as soon as a tab that holds the recording lock with nothing else of its own finds it, however fresh its heartbeat, its finalizer or its lease look; while another tab holds the lock, or this tab holds it for work of its own, a live recording is left alone",
+      "suites": [
+        "storage-paths",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-LOCK-PROOF-NEVER",
+        "MUT-LOCK-PROOF-WHILE-BUSY",
+        "MUT-STALE-FINALIZER-BLOCKS"
+      ]
+    },
+    {
+      "id": "STOP-SECURES-FIRST-001",
+      "title": "Stop puts the audio and the live transcript a recording holds only in memory on disk before it lets go of the microphone, the encoder or the audio graph, and stores the last audio before it waits for the live transcript; hiding the app during a recording stores both at once",
+      "suites": [
+        "storage-paths",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-STOP-RELEASES-FIRST",
+        "MUT-SECURE-SKIPS-AUDIO",
+        "MUT-SECURE-SKIPS-LIVE"
+      ]
+    },
+    {
+      "id": "LIVE-SNAPSHOT-SHORT-001",
+      "title": "While recording, a live transcript of a few minutes is saved every minute it changed, so a browser that dies at Stop loses at most a minute of it; a long one still waits until it has grown enough",
+      "suites": [
+        "pure"
+      ],
+      "mutationGuards": [
+        "MUT-SNAPSHOT-SHORT-WAITS"
+      ]
+    },
+    {
+      "id": "STOP-INTERRUPTION-NOTE-001",
+      "title": "Every beat Stop writes names the step it has reached; a recording recovered after the app was closed under it remembers whether that was while recording or at which step of Stop, and its row says so until ✕ removes the note; a Stop that ended by itself without saving is not reported as a closed app",
+      "suites": [
+        "pure",
+        "storage-paths",
+        "app-behaviour",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-INTERRUPTION-NOT-NOTED",
+        "MUT-STOP-ENDED-AS-CLOSED",
+        "MUT-INTERRUPTION-NOTE-HIDDEN",
+        "MUT-INTERRUPTION-DISMISS-NOT-STORED"
+      ]
     }
   ],
   "untestedModules": []

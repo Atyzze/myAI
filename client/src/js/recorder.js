@@ -10,7 +10,8 @@ import { pickOpusMime, resolveRecordingFormat } from './audio-format.js';
 import { initialCaptureHealth, nextCaptureHealth, captureHealthTransition,
          shouldTryResume, describeCaptureStall, describeCaptureRecovery,
          capturedMs, opusLengthMs, samplesBeforeTap, heartbeatRowDue, liveSnapshotDue, captureBeatRecord,
-         CAPTURE_STALL_MS, captureStallMs, meterLevel, nextAutoGain, LIMITER_SETTINGS } from './capture-health-core.js';
+         CAPTURE_STALL_MS, captureStallMs, meterLevel, nextAutoGain, LIMITER_SETTINGS,
+         interruptionFromBeat, describeInterruption, STOP_ENDED } from './capture-health-core.js';
 import { storageRunway, sessionRunway,
          describeRunway, describeRunwayAlert, runwayTone,
          nextRunwayAlert } from './runway-core.js';
@@ -31,7 +32,7 @@ import { liveTranscriptAfterCleanup }             from './deletion-core.js';
 import { enableWakeLock, disableWakeLock }         from './wake-lock.js';
 import { acquireRecordingLock, releaseRecordingLock, getRecordingOwnerId,
          publishRecordingLease, isRecordOwnedByLiveTab, isFreshHeartbeat,
-         beatHeartbeatAt, recordHeartbeatAt } from './recording-lock.js';
+         beatHeartbeatAt, recordHeartbeatAt, lockProvesOtherTabsGone } from './recording-lock.js';
 
 export const AppState = {
     recId: null, audioCtx: null, stream: null,
@@ -261,7 +262,7 @@ function liveCaptureFlags(recId) {
 }
 
 async function persistOwnedHeartbeat(recId, durationMs, state, sessionId = AppState.sessionId, liveTranscript = null,
-                                     { force = false, captureFlags = null } = {}) {
+                                     { force = false, captureFlags = null, stopStep = null } = {}) {
     if (recId == null) return;
     const now = Date.now();
     publishRecordingLease(recId, now, sessionId, durationMs);
@@ -270,7 +271,7 @@ async function persistOwnedHeartbeat(recId, durationMs, state, sessionId = AppSt
     try {
         const beat = captureBeatRecord({
             recId, ownerId: AppState.ownerId, sessionId, now, durationMs, capturedMs: heardMs, state,
-            captureFlags: captureFlags || liveCaptureFlags(recId)
+            captureFlags: captureFlags || liveCaptureFlags(recId), stopStep
         });
         beatStored = await writeCaptureBeat(beat);
     } catch (err) {
@@ -901,12 +902,14 @@ function makeFinalizerId() {
     return `${AppState.ownerId}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
-async function claimFinalizer(recId) {
+// otherTabsGone: this tab holds the recording lock with nothing else of its own holding it, so no
+// tab, this one included, is finalizing anything: a fresh finalizer on the row died with its page.
+async function claimFinalizer(recId, { otherTabsGone = false } = {}) {
     const finalizerId = makeFinalizerId();
     const now = Date.now();
     const claimed = await dbUpdate(CONFIG.STORE_REC, recId, rec => {
         if (!rec || !rec.processing || rec.deleting) return null;
-        if (rec.finalizerId && rec.finalizerId !== finalizerId
+        if (rec.finalizerId && rec.finalizerId !== finalizerId && !otherTabsGone
             && isFreshHeartbeat(rec.finalizerHeartbeatAt, now)) return null;
         rec.finalizerId = finalizerId;
         rec.finalizerHeartbeatAt = now;
@@ -1099,6 +1102,11 @@ async function absorbCaptureBeat(recId, beat, fallbackMs) {
             if (Number(beat.capturedMs) > 0) rec.capturedMs = Math.max(rec.capturedMs || 0, Number(beat.capturedMs));
             if (beat.captureError && !rec.captureError) rec.captureError = { ...beat.captureError };
             if (beat.incompleteAudio) rec.incompleteAudio = true;
+            const interruption = interruptionFromBeat(beat);
+            if (interruption) {
+                rec.interruption = interruption;
+                console.warn(`Recovering recording ${recId}: ${describeInterruption(interruption)}`);
+            }
             return rec;
         });
         return updated ? updated.durationMs : fallbackMs;
@@ -1121,18 +1129,23 @@ export async function recoverIncompleteRecordings({ retryFailed = true } = {}) {
     let deferred = 0;
     try {
         for (const rec of pending) {
+            // Asked again for each recording: a recording or a save this tab starts meanwhile holds
+            // the lock as well, and then the heartbeat decides again.
+            const otherTabsGone = AppState.recId !== rec.id && lockProvesOtherTabsGone();
             const beat = beats.get(Number(rec.id)) || null;
             if (AppState.recId === rec.id || isRecordOwnedByLiveTab(rec, now, beat)) {
-                deferred++;
-                continue;
+                if (!otherTabsGone) {
+                    deferred++;
+                    continue;
+                }
             }
             const heartbeatAt = recordHeartbeatAt(rec, beat);
-            if (rec.captureState !== 'finalize-error' && heartbeatAt && isFreshHeartbeat(heartbeatAt, now)) {
+            if (!otherTabsGone && rec.captureState !== 'finalize-error' && heartbeatAt && isFreshHeartbeat(heartbeatAt, now)) {
                 deferred++;
                 continue;
             }
 
-            const finalizerId = await claimFinalizer(rec.id);
+            const finalizerId = await claimFinalizer(rec.id, { otherTabsGone });
             if (!finalizerId) {
                 deferred++;
                 continue;
@@ -1182,6 +1195,62 @@ async function flushCapturedAudioToStorage() {
         console.warn('Could not flush captured audio before backfilling:', err);
     }
     await Promise.allSettled([...AppState.pendingFlushes]);
+}
+
+// The encoder's next piece, asked for now instead of at the end of its four seconds. Settles once
+// ondataavailable, which runs first, has sent that piece on its way to storage, or after a second
+// if the encoder sends nothing.
+function requestEncoderPiece() {
+    const recorder = AppState.mediaRecorder;
+    if (!recorder || recorder.state !== 'recording') return Promise.resolve();
+    return new Promise(resolve => {
+        let timer = null;
+        const done = () => {
+            clearTimeout(timer);
+            recorder.removeEventListener('dataavailable', done);
+            resolve();
+        };
+        timer = setTimeout(done, 1000);
+        recorder.addEventListener('dataavailable', done);
+        try { recorder.requestData(); } catch (_) { done(); }
+    });
+}
+
+// Puts on disk what the recording holds only in memory: the audio since its last stored piece and
+// the live transcript since its last snapshot. Stop does this before it touches the microphone, the
+// encoder or the audio graph, and a recording does it whenever the app is hidden, because those are
+// the moments a phone's browser is most often killed, and its memory goes with it (Build 143).
+async function secureInMemoryCapture() {
+    const recId = AppState.recId;
+    if (recId == null) return;
+    try {
+        if (AppState.mediaRecorder) await requestEncoderPiece();
+        else if (AppState.pcmLength > 0 && !AppState.captureError) {
+            await trackPendingFlush(flushPcmToDb(true, AppState.pcmLength));
+        }
+    } catch (err) {
+        console.warn('Could not save the latest audio ahead of time:', err);
+    }
+    await Promise.allSettled([...AppState.pendingFlushes]);
+    if (AppState.recId !== recId || !isLiveScribeActive()) return;
+    const sizeAndSignature = liveTranscriptSizeAndSignature();
+    if (AppState.liveSnapshot && AppState.liveSnapshot.signature === sizeAndSignature.signature) return;
+    const live = liveScribeResult();
+    if (!live) return;
+    try {
+        if (await writeLiveTranscript(recId, live)) AppState.liveSnapshot = { at: Date.now(), ...sizeAndSignature };
+    } catch (err) {
+        console.warn('Could not save the live transcript ahead of time:', err);
+    }
+}
+
+const secureRecordingOnce = singleFlight(() => secureInMemoryCapture());
+
+export function secureRecordingNow() {
+    if (AppState.recId == null || !AppState.startTime || AppState.busy || AppState.captureStopping) {
+        return Promise.resolve();
+    }
+    return secureRecordingOnce();
 }
 
 setLiveScribeAudioSource(recId => buildLivePreviewBlob(recId));
@@ -1378,20 +1447,34 @@ async function stopRecordingNow() {
     let finalizationError = null;
     let stopFlags = null;
     let rowSettled = false;
-
-    persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId).catch(() => {});
-    finalizationHeartbeat = setInterval(
-        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
-                                    { captureFlags: stopFlags }),
-        CONFIG.RECORDING_HEARTBEAT_MS
-    );
+    // The step Stop has reached, on every beat it writes, so recovery can tell where a browser that
+    // died during Stop left it. Each step is on disk before the step begins.
+    let stopStep = 'securing';
+    const reachStep = step => {
+        stopStep = step;
+        return persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
+                                     { captureFlags: stopFlags, stopStep }).catch(() => {});
+    };
 
     const began = Date.now();
     let lastMark = began;
     const phases = [];
     const mark = name => { const now = Date.now(); phases.push(`${name} ${now - lastMark}ms`); lastMark = now; };
 
+    await reachStep('securing');
+    finalizationHeartbeat = setInterval(
+        () => persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
+                                    { captureFlags: stopFlags, stopStep }),
+        CONFIG.RECORDING_HEARTBEAT_MS
+    );
+
     try {
+        // Nothing is let go before what is only in memory is on disk: a browser that dies while
+        // the microphone or the encoder is being released then loses no audio and no live text.
+        await secureInMemoryCapture();
+        mark('secured');
+
+        await reachStep('releasing');
         if (AppState.mediaRecorder) {
             try { await ensureMediaRecorderStopped(); } catch (_) {}
         }
@@ -1404,19 +1487,20 @@ async function stopRecordingNow() {
                 AppState.workletNode.disconnect();
             }
         } catch (_) {}
+        // The last audio is stored before the live transcript is finished, which can take seconds.
+        await flushPcmToDb(true, AppState.pcmLength);
+        await Promise.allSettled([...AppState.pendingFlushes]);
+        mark('encoder and last fragments');
 
-        mark('encoder');
         if (isLiveScribeActive()) {
+            await reachStep('liveTail');
             try { await flushLiveScribe(); }
             catch (err) { console.warn('Live transcription flush failed:', err); }
         }
         mark('live tail');
         const liveResult = liveScribeResult();
 
-        await flushPcmToDb(true, AppState.pcmLength);
-        await Promise.allSettled([...AppState.pendingFlushes]);
-        mark('last fragments');
-
+        await reachStep('noting');
         unsaved = await retryUncommittedFragments(currentId, currentSessionId);
         failure = AppState.captureError || failure;
         unsavedBytes = unsaved.reduce((sum, fragment) => sum + (fragment.blob?.size || 0), 0);
@@ -1465,8 +1549,9 @@ async function stopRecordingNow() {
         }
         mark('live transcript');
 
+        stopStep = 'closing';
         await persistOwnedHeartbeat(currentId, finalDuration, 'finalizing', currentSessionId, null,
-                                    { force: true, captureFlags: stopFlags });
+                                    { force: true, captureFlags: stopFlags, stopStep });
 
         AppState.savingId = currentId;
         cleanupRecordingState();
@@ -1474,6 +1559,7 @@ async function stopRecordingNow() {
         returnToMainView();
         await _renderList();
         mark('first repaint');
+        await reachStep('saving');
         await finalizeRecording(currentId, finalDuration, { runPipeline: false, stopFlags });
         rowSettled = true;
         mark('master blob');
@@ -1486,6 +1572,15 @@ async function stopRecordingNow() {
     } catch (err) {
         finalizationError = err;
         cleanupRecordingState();
+        // Stop ends here without saving the recording, a full disk say. If the failure cannot be
+        // noted on the row either, the beat stays for recovery, and says Stop ended by itself, so
+        // recovery does not report the app as closed under it.
+        stopStep = STOP_ENDED;
+        await writeCaptureBeat(captureBeatRecord({
+            recId: currentId, ownerId: AppState.ownerId, sessionId: currentSessionId, now: Date.now(),
+            durationMs: finalDuration, state: 'finalizing', captureFlags: stopFlags, stopStep,
+            capturedMs: capturedMs(AppState.samplesSeen || 0, AppState.audioCtx ? AppState.audioCtx.sampleRate : 0)
+        })).catch(() => {});
         try { rowSettled = !!(await markFinalizationError(currentId, finalDuration, err, null, stopFlags)); }
         catch (markErr) { console.error('Could not persist finalization error state:', markErr); }
     } finally {

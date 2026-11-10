@@ -972,12 +972,15 @@ try {
     ok(beatCounts.fps === 'none', 'the frame counter over the waveform is hidden unless debugging is switched on');
     ok(!beatLeft, 'once the recording is saved its beat is gone');
 
-    journey('Recovery reads the beat too: a recording whose row is old but whose beat is fresh is left alone, '
+    journey('Recovery reads the beat too: while this tab holds the recording lock for work of its own, '
+        + 'a recording whose row is old but whose beat is fresh is left alone, '
         + 'and one whose beat has gone quiet is recovered with the length its beat recorded');
     const ghost = await app.evaluate(`(async () => {
         const db = await import('/src/js/db.js');
         const { CONFIG } = await import('/src/js/config.js');
         const { recoverIncompleteRecordings } = await import('/src/js/recorder.js');
+        const lock = await import('/src/js/recording-lock.js');
+        if (!await lock.acquireRecordingLock()) return { lockRefused: true };
         const now = Date.now();
         const id = await db.dbExec(CONFIG.STORE_REC, 'add', {
             filename: 'ghost', timestamp: now - 90000, durationMs: 10000, processing: true, captureState: 'recording',
@@ -992,6 +995,7 @@ try {
         const second = await recoverIncompleteRecordings();
         const after = await db.dbExec(CONFIG.STORE_REC, 'get', id);
         const beatLeft = (await db.readCaptureBeats()).has(id);
+        await lock.releaseRecordingLock();
         await db.dbExec(CONFIG.STORE_REC, 'delete', id);
         return { first, stillOpen, second, processing: after.processing, durationMs: after.durationMs, beatLeft };
     })()`);
@@ -999,6 +1003,74 @@ try {
        `a recording whose row is a minute old but whose beat is fresh is not recovered out from under the tab recording it (${JSON.stringify(ghost.first)})`);
     ok(ghost.second.recovered >= 1 && !ghost.processing && ghost.durationMs === 25000 && !ghost.beatLeft,
        `once its beat goes quiet it is recovered with the length the beat recorded (${JSON.stringify(ghost)})`);
+
+    journey('A recording whose browser died during Stop a moment ago is recovered as soon as the app opens, '
+        + 'not after its heartbeat goes stale, and its row says at which step of Stop the app was closed until ✕ removes the note');
+    const diedAtStop = await app.evaluate(`(async () => {
+        const db = await import('/src/js/db.js');
+        const { CONFIG } = await import('/src/js/config.js');
+        const { RECORDING_LEASE_KEY } = await import('/src/js/recording-lock.js');
+        const { recoverIncompleteRecordings } = await import('/src/js/recorder.js');
+        const { encodeMonoWav } = await import('/src/js/audio.js');
+        const gui = await import('/src/js/gui.js');
+        const now = Date.now();
+        const piece = encodeMonoWav(new Float32Array(16000 * 2).fill(0.1), 16000);
+        const id = await db.dbExec(CONFIG.STORE_REC, 'add', {
+            filename: 'died at stop', timestamp: now - 30000, durationMs: 4000, processing: true, captureState: 'finalizing',
+            ownerId: 'tab-that-died', sessionId: 'died', heartbeatAt: now, sampleRate: 16000,
+            format: 'wav', resultGeneration: 0, transcripts: [], summaries: [] });
+        for (const seq of [0, 1]) {
+            await db.dbExec(CONFIG.STORE_FRAGMENTS, 'add', { recId: id, sessionId: 'died', seq, createdAt: now, blob: piece, bytes: piece.size });
+        }
+        await db.writeCaptureBeat({ recId: id, ownerId: 'tab-that-died', sessionId: 'died', heartbeatAt: now,
+                                    state: 'finalizing', durationMs: 4000, stopStep: 'releasing' });
+        localStorage.setItem(RECORDING_LEASE_KEY, JSON.stringify({ ownerId: 'tab-that-died', recId: id, sessionId: 'died', durationMs: 4000, heartbeatAt: now }));
+        const began = Date.now();
+        const outcome = await recoverIncompleteRecordings();
+        const tookMs = Date.now() - began;
+        localStorage.removeItem(RECORDING_LEASE_KEY);
+        const rec = await db.dbExec(CONFIG.STORE_REC, 'get', id);
+        gui.resetListToFirstPage();
+        await gui.renderList({ force: true });
+        const rowNode = document.getElementById('rec-' + id);
+        const note = rowNode ? (rowNode.querySelector('[data-action="dismissInterruption"]')?.closest('.rec-warning')?.textContent || '') : '';
+        rowNode?.querySelector('[data-action="dismissInterruption"]')?.click();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const after = await db.dbExec(CONFIG.STORE_REC, 'get', id);
+        const noteGone = !document.getElementById('rec-' + id)?.querySelector('[data-action="dismissInterruption"]');
+        await db.dbExec(CONFIG.STORE_REC, 'delete', id);
+        await db.deleteAudio(id);
+        return { outcome, tookMs, processing: rec.processing, audioBytes: rec.audioBytes, durationMs: rec.durationMs,
+                 interruption: rec.interruption || null, note, dismissed: !after.interruption, noteGone };
+    })()`);
+    ok(diedAtStop.outcome.deferred === 0 && !diedAtStop.processing && diedAtStop.audioBytes > 0 && diedAtStop.durationMs === 4000,
+       `a recording whose browser died during Stop a moment ago is recovered at once, with all of its audio (${JSON.stringify(diedAtStop)})`);
+    ok(diedAtStop.interruption && diedAtStop.interruption.step === 'releasing'
+       && /closed while it was stopping this recording \(letting go of the microphone and the encoder\)/.test(diedAtStop.note),
+       `and its row says the app was closed while Stop was letting go of the microphone (${diedAtStop.note})`);
+    ok(diedAtStop.dismissed && diedAtStop.noteGone, 'and ✕ removes that note from the recording and the row');
+
+    journey('Hiding the app during a recording stores the audio held in memory at once, instead of up to four seconds later');
+    const hiddenRec = await record(app, 2, { format: 'opus', stop: false });
+    const hidden = await app.evaluate(`(async () => {
+        const db = await import('/src/js/db.js');
+        const piecesNow = async () => (await db.getAudioFragmentsForRecording(${hiddenRec})).length;
+        await new Promise(resolve => setTimeout(resolve, 2500));
+        const before = await piecesNow();
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        const end = Date.now() + 1500;
+        let after = before;
+        while (Date.now() < end && after === before) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            after = await piecesNow();
+        }
+        delete document.visibilityState;
+        return { before, after, visible: document.visibilityState };
+    })()`);
+    ok(hidden.after > hidden.before && hidden.visible === 'visible',
+       `hiding the app during a recording stores the audio recorded since the last piece right away (${JSON.stringify(hidden)})`);
+    await stopRecording(app, hiddenRec);
 
     journey('Silence is marked in the timestamped reading but never handed to the model as speech');
     const silentId = await app.evaluate(`(async () => {

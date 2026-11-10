@@ -23,6 +23,7 @@ import { isCompact, noticeInterruptedDeletion } from './settings.js';
 import { retentionMs, planRecordRetention, fmtRetentionRemaining, setPinned } from './retention-core.js';
 import { isRecordOwnedByLiveTab, isFreshHeartbeat } from './recording-lock.js';
 import { unfinishedRowState, ROW_ACTION_LABELS, liveHolesToFill, keyActivates } from './row-state-core.js';
+import { describeInterruption } from './capture-health-core.js';
 
 const UI = {
     list:    document.getElementById('recordingsList'),
@@ -755,6 +756,12 @@ function buildRecordingItem(rec) {
                 ? `Recording stopped because ${escapeHtml(captureFailureReason)}, but the failed segment was recovered before finalization.`
                 : `Recording stopped because ${escapeHtml(captureFailureReason)}. Audio captured before the failure was saved successfully.`)}</span><button class="rec-dismiss" data-action="dismissCaptureWarning" data-rec-id="${rec.id}" title="Dismiss this notice" aria-label="Dismiss this notice">✕</button></div>`
         : '';
+    // A recording recovered after the app was closed under it says so, and when, until ✕ removes the
+    // note from the recording (Build 143).
+    const interruptionText = describeInterruption(rec.interruption);
+    const interruptionHtml = interruptionText
+        ? `<div class="rec-warning rec-dismissible" role="status"><span class="rec-notice-text">${escapeHtml(interruptionText)}</span><button class="rec-dismiss" data-action="dismissInterruption" data-rec-id="${rec.id}" title="Dismiss this notice" aria-label="Dismiss this notice">✕</button></div>`
+        : '';
 
     const recordingNow = AppState.recId != null;
     const continueBtn = hasTranscripts
@@ -792,6 +799,7 @@ function buildRecordingItem(rec) {
     </div>
     ${contextChainHtml}
     ${captureWarningHtml}
+    ${interruptionHtml}
     ${remuxWarningHtml}
     ${pipelineErrorHtml}
     ${fillWarningHtml}
@@ -1439,6 +1447,21 @@ window.dismissCaptureWarning = async function dismissCaptureWarning(id) {
     return changed;
 };
 
+// The note that the app was closed under a recording goes the same way: ✕ removes it from the
+// stored recording and leaves the recording as it is.
+window.dismissInterruption = async function dismissInterruption(id) {
+    const key = Number(id);
+    let changed = false;
+    await dbUpdate(CONFIG.STORE_REC, key, (rec) => {
+        if (!rec || rec.processing || rec.deleting || !rec.interruption) return null;
+        delete rec.interruption;
+        changed = true;
+        return rec;
+    });
+    await renderList({ force: true });
+    return changed;
+};
+
 window.downloadRec = async function downloadRec(id) {
     const key = Number(id);
     const rec = await dbExec(CONFIG.STORE_REC, 'get', key);
@@ -1504,6 +1527,7 @@ export function wireActionDelegation() {
             case 'toggleLinkRec': return window.toggleLinkRec(recId, el.dataset.linkLabel || '');
             case 'pinRec': return window.pinRec(recId, el.dataset.pin === '1');
             case 'dismissCaptureWarning': return window.dismissCaptureWarning(recId);
+            case 'dismissInterruption': return window.dismissInterruption(recId);
             case 'downloadRec': return window.downloadRec(recId);
             case 'deleteTranscript': {
                 const selected = document.getElementById(`drop-t-${recId}`)?.value;

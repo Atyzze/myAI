@@ -90,6 +90,10 @@ export const LIVE_SNAPSHOT_MIN_INTERVAL_MS = 60000;
 export const LIVE_SNAPSHOT_MAX_INTERVAL_MS = 5 * 60000;
 export const LIVE_SNAPSHOT_MIN_GROWTH_SHARE = 0.25;
 export const LIVE_SNAPSHOT_MIN_GROWTH_CHARS = 4000;
+// Below this a live transcript costs next to nothing to write, so it is saved every minute it
+// changed (Build 143). The growth rule below exists for transcripts of hours; applied to one of a
+// few minutes it left nearly all of it unsaved until Stop, and a browser that died at Stop took it.
+export const LIVE_SNAPSHOT_SMALL_CHARS = 32000;
 
 export function liveSnapshotDue({ now = 0, last = null, chars = 0, signature = '' } = {}) {
     if (!last) return Number(chars) > 0;
@@ -98,6 +102,7 @@ export function liveSnapshotDue({ now = 0, last = null, chars = 0, signature = '
     const sinceLastSnapshotMs = Number(now) - (Number(last.at) || 0);
     if (sinceLastSnapshotMs < LIVE_SNAPSHOT_MIN_INTERVAL_MS) return false;
     if (sinceLastSnapshotMs >= LIVE_SNAPSHOT_MAX_INTERVAL_MS) return true;
+    if (Number(chars) <= LIVE_SNAPSHOT_SMALL_CHARS) return true;
     const charsAtLastSnapshot = Math.max(0, Number(last.chars) || 0);
     const grownChars = Number(chars) - charsAtLastSnapshot;
     return grownChars >= Math.max(LIVE_SNAPSHOT_MIN_GROWTH_CHARS, charsAtLastSnapshot * LIVE_SNAPSHOT_MIN_GROWTH_SHARE);
@@ -106,8 +111,10 @@ export function liveSnapshotDue({ now = 0, last = null, chars = 0, signature = '
 // The beat is what recovery reads when a stop could not save the row, so it has to keep saying
 // that capture failed and audio is missing for as long as the recording is being finalized,
 // also after the recording's own state was torn down.
+// While Stop runs, the beat also names the step it has reached (`stopStep`, Build 143), so a
+// recording recovered after the browser died during Stop can say where.
 export function captureBeatRecord({ recId, ownerId = null, sessionId = null, now = 0, durationMs = 0,
-                                    capturedMs = 0, state = '', captureFlags = null } = {}) {
+                                    capturedMs = 0, state = '', captureFlags = null, stopStep = null } = {}) {
     const beat = {
         recId, ownerId, sessionId: sessionId || null, heartbeatAt: now,
         durationMs: Math.max(0, Number(durationMs) || 0), capturedMs, state
@@ -116,7 +123,49 @@ export function captureBeatRecord({ recId, ownerId = null, sessionId = null, now
         beat.captureError = { ...captureFlags.captureError };
         beat.incompleteAudio = !!captureFlags.incompleteAudio;
     }
+    if (stopStep) beat.stopStep = String(stopStep);
     return beat;
+}
+
+// The steps of Stop, in the order it takes them. Each is written to the beat before it begins.
+// Everything the recording held only in memory is saved in the first one, before the microphone,
+// the encoder or the audio graph are touched.
+export const STOP_STEPS = Object.freeze({
+    securing: 'saving what was only in memory',
+    releasing: 'letting go of the microphone and the encoder',
+    liveTail: 'finishing the live transcript',
+    noting: 'noting the stop on the recording',
+    closing: 'closing the audio',
+    saving: 'putting the recording together'
+});
+// Stop finished without saving the recording, a full disk say: its beat stays for recovery, and
+// recovery must not report the app as closed under it.
+export const STOP_ENDED = 'ended';
+
+// What a recording keeps about the app having been closed under it (by the person, the browser or
+// the phone): while it was recording, or while Stop was at a given step. Recovery writes it from the
+// recording's last beat; the list shows it until it is dismissed.
+export function interruptionFromBeat(beat) {
+    if (!beat || !(Number(beat.heartbeatAt) > 0)) return null;
+    if (beat.state === 'recording' || beat.state === 'starting') {
+        return { during: 'recording', lastAliveAt: Number(beat.heartbeatAt) };
+    }
+    if (beat.state !== 'finalizing' || beat.stopStep === STOP_ENDED) return null;
+    const step = Object.prototype.hasOwnProperty.call(STOP_STEPS, beat.stopStep) ? beat.stopStep : null;
+    return { during: 'stop', ...(step ? { step } : {}), lastAliveAt: Number(beat.heartbeatAt) };
+}
+
+export function describeInterruption(interruption) {
+    if (!interruption || !interruption.during) return '';
+    const step = interruption.step && STOP_STEPS[interruption.step];
+    const when = interruption.during === 'recording'
+        ? 'while it was recording, before it could save the recording itself'
+        : step ? `while it was stopping this recording (${step})` : 'while it was stopping this recording';
+    const audioWhole = interruption.during === 'stop' && !!step && interruption.step !== 'securing';
+    return `myAI was closed ${when}. `
+        + (audioWhole
+            ? 'Its audio had been saved by then and was put together from the saved pieces.'
+            : 'It was put together from the pieces it had saved, so at most the last few seconds of audio are missing.');
 }
 
 export function heartbeatRowDue({ last = null, recId = null, state = '', now = 0,

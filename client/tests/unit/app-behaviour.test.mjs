@@ -706,6 +706,31 @@ function zipEntries(bytes) {
     ok(!!(await row(saving)).captureError, 'capture notice: its failure is still there for the save to use');
 }
 
+// A recording recovered after the app was closed under it says when that happened; ✕ removes the note.
+{
+    await clearAll();
+    const gui = await import('../../src/js/gui.js');
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowHtml = recId => (walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`) || {}).innerHTML || '';
+    const atStop = await addRecording({ filename: 'closed at stop',
+                                        interruption: { during: 'stop', step: 'releasing', lastAliveAt: Date.now() } }, { audio: wav(1) });
+    const midway = await addRecording({ filename: 'closed while recording',
+                                        interruption: { during: 'recording', lastAliveAt: Date.now() } }, { audio: wav(1) });
+    await gui.renderList({ force: true });
+    await settle();
+    ok(/closed while it was stopping this recording \(letting go of the microphone and the encoder\)\. Its audio had been saved by then/.test(rowHtml(atStop))
+       && /data-action="dismissInterruption" data-rec-id="\d+"/.test(rowHtml(atStop)),
+       'interruption note: a recording recovered after the app was closed during Stop says at which step, and offers ✕');
+    ok(/closed while it was recording, before it could save the recording itself\. .*at most the last few seconds of audio are missing/.test(rowHtml(midway)),
+       'interruption note: one closed while recording says at most its last seconds are missing');
+    ok(await window.dismissInterruption(atStop), 'interruption note: a tap on ✕ dismisses it');
+    const after = await row(atStop);
+    ok(!after.interruption && Number(after.audioBytes) > 0 && after.filename === 'closed at stop',
+       'interruption note: it is removed from the stored recording, and nothing else about the recording changes');
+    ok(!/closed while it was stopping/.test(rowHtml(atStop)) && /closed while it was recording/.test(rowHtml(midway)),
+       'interruption note: and only that one is gone from the list');
+}
+
 await clearAll();
 memoryIdb.reset();
 console.log(`✓ all ${assertions} app-behaviour assertions passed`);

@@ -4,7 +4,7 @@ import { calcTotalStorage, cleanupOrphanWavChunks, cleanupOrphanAudio,
 import { describeConnectionGuard } from './db-lifecycle-core.js';
 import { CONFIG, fmtDur, getLocalIso } from './config.js';
 import { buildClipboardContextItem, CLIPBOARD_CONTEXT_MAX_CHARS } from './clipboard-core.js';
-import { AppState, startRecording, stopRecording,
+import { AppState, startRecording, stopRecording, secureRecordingNow,
          recoverIncompleteRecordings, retryFinalizeRecording, downloadRecoverableAudio, setRenderList,
          setLiveTranscription, isLiveTranscriptionOn, followUpsRunning,
          onRecordingStateChange, addContextToRecording, describeLiveContext } from './recorder.js';
@@ -217,6 +217,18 @@ recordBtn.onclick = () => {
     }
     beginRecordingSession();
 };
+
+// A phone's browser in the background can be killed without warning, and a recording holds up to
+// four seconds of audio and a minute or more of live transcript only in memory. So whenever the
+// app is hidden or the page is going away, those are put on disk first.
+const secureRecordingInBackground = () => {
+    secureRecordingNow().catch(err => console.warn('Could not save the recording ahead of time:', err));
+};
+document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') secureRecordingInBackground();
+});
+document.addEventListener('freeze', secureRecordingInBackground);
+window.addEventListener('pagehide', secureRecordingInBackground);
 
 const pasteRecordBtn = document.getElementById('pasteRecordBtn');
 function paintPasteRecordButton() {
