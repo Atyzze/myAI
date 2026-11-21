@@ -4870,6 +4870,119 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
        'auto-scroll: a text that fits on screen is at its end straight away');
 }
 
+// 📑 on a recording: two copies and a ZIP of structured JSON, never with the AI's thinking (Build 146).
+{
+    const { buildRecordingCopy, buildRecordingExport, recordingExportName, withoutThinking,
+            RECORDING_EXPORT_FORMAT, RECORDING_EXPORT_VERSION } = await import('../../src/js/export-core.js');
+    const { buildBudgetedPrompt } = await import('../../src/js/reply-core.js');
+    const { zipFiles, crc32Init, crc32Update, crc32Final } = await import('../../src/js/backup-core.js');
+    const { buildClipboardContextItem } = await import('../../src/js/clipboard-core.js');
+
+    const instructions = '  Answer in Dutch.  ';
+    const continued = { inputText: 'what I said last week', outputText: 'what the AI answered last week',
+        text: '[User Scribe Input]: what I said last week\n[AI Summary/Reply Output]: what the AI answered last week\n',
+        label: 'Continued from: 2026-11-14 10:00 (T1 S1)', srcTimestamp: '2026-11-14 10:00', sourceRecId: 3 };
+    const linked = { inputText: 'a linked note', outputText: '', text: '[User Scribe Input]: a linked note\n',
+        label: 'Linked from: 2026-11-15 09:00', srcTimestamp: '2026-11-15 09:00', sourceRecId: 4 };
+    const pasted = buildClipboardContextItem('a pasted article', '2026-11-21 17:00');
+    const rec = {
+        id: 9, filename: '2026-11-21 17:30 - note', title: 'Kitchen plans', timestamp: Date.UTC(2026, 10, 21, 16, 30), durationMs: 61000,
+        contextChain: [continued, linked, pasted],
+        transcripts: [
+            { id: 'tNew', source: 'S', text: '[00:01] the newer reading', plain: 'the newer reading', time: Date.UTC(2026, 10, 21, 16, 40) },
+            { id: 'tOld', source: 'L', text: '[00:01] the live reading', plain: 'the live reading', time: Date.UTC(2026, 10, 21, 16, 31) }
+        ],
+        summaries: [
+            { id: 's3', transcriptId: 'tNew', text: '<think>secret inline reasoning</think>\nThe second answer.', model: 'qwen3:8b',
+              time: 3, thinking: 'the hidden reasoning of the second', end: { state: 'cutoff', reason: 'limit' } },
+            { id: 's2', transcriptId: 'tOld', text: 'An answer to the live reading.', model: 'qwen3:8b', time: 2 },
+            { id: 's1', transcriptId: 'tNew', text: 'The first answer.', model: 'gemma4:e4b', time: 1,
+              thinking: 'the hidden reasoning of the first', condensed: true }
+        ]
+    };
+
+    const userOnly = buildRecordingCopy(rec, { instructions, transcriptId: 'tNew', withReplies: false });
+    eq(userOnly, buildBudgetedPrompt({ instructions, chain: rec.contextChain, transcript: 'the newer reading' }).prompt,
+       'export: copy without AI replies is exactly the prompt 🧠 Reply sends for the transcript shown');
+    ok(userOnly.includes('what I said last week') && userOnly.includes('what the AI answered last week')
+       && userOnly.includes('a linked note') && userOnly.includes('a pasted article') && userOnly.includes('Answer in Dutch.'),
+       'export: and it carries every context item, continued, linked and pasted, and the AI instructions');
+    ok(!/The first answer|The second answer|AI REPLY/.test(userOnly), 'export: but none of the recording\'s own AI replies');
+
+    const everything = buildRecordingCopy(rec, { instructions, transcriptId: 'tNew' });
+    ok(everything.startsWith(userOnly + '\n\n'), 'export: copy everything starts with the same context and transcript');
+    ok(everything.endsWith('[AI REPLY 1 OF 2 · gemma4:e4b]:\nThe first answer.\n\n[AI REPLY 2 OF 2 · qwen3:8b]:\nThe second answer.'),
+       `export: and adds the replies to the transcript shown, oldest first, with their models (${everything.slice(-160)})`);
+    ok(!/hidden reasoning|secret inline reasoning|<think>/.test(everything),
+       'export: the AI\'s thinking is never copied, neither the stored reasoning nor reasoning written into the answer');
+    ok(!everything.includes('An answer to the live reading.') && !everything.includes('the live reading'),
+       'export: a reply to another transcript, and that transcript, are left out of the copy');
+
+    const live = buildRecordingCopy(rec, { instructions, transcriptId: 'tOld' });
+    ok(live.includes('the live reading') && live.endsWith('[AI REPLY · qwen3:8b]:\nAn answer to the live reading.'),
+       'export: the copy follows the transcript the row shows');
+    ok(buildRecordingCopy(rec, { instructions }).includes('the newer reading'),
+       'export: with nothing chosen, the newest transcript is the one shown');
+
+    const bare = buildRecordingCopy({ transcripts: [{ id: 't', plain: 'just words' }],
+        summaries: [{ id: 's', transcriptId: 't', text: 'A reply.' }] });
+    eq(bare, '[AUDIO TRANSCRIPT]:\njust words\n\n[AI REPLY]:\nA reply.',
+       'export: a recording without context names its transcript, so the reply after it is not taken for part of it');
+    eq(buildRecordingCopy({ transcripts: [{ id: 't', plain: 'just words' }] }, { withReplies: false }), 'just words',
+       'export: and without replies it is the bare transcript the reply was asked with');
+    const onlyPasted = buildRecordingCopy({ contextChain: [pasted], transcripts: [] });
+    ok(onlyPasted.includes('a pasted article'), 'export: a recording that only carries context still copies that context');
+
+    const huge = 'row 12345, value 67890; '.repeat(20000);
+    const big = buildRecordingCopy({ contextChain: [{ label: 'Pasted', text: `[Pasted Note]: ${huge}`, inputText: huge }],
+                                     transcripts: [{ id: 't', plain: 'a short note' }] }, { withReplies: false });
+    ok(big.includes(huge) && big.endsWith('a short note'),
+       'export: context too long for the local model is copied whole, never shortened as the local reply is');
+
+    eq(withoutThinking('<think>\nmull it over\n</think>\n\nThe answer.'), 'The answer.',
+       'export: reasoning a model wrote into its answer is taken out');
+
+    const data = buildRecordingExport(rec, { instructions, transcriptId: 'tNew', exportedAt: Date.UTC(2026, 10, 21, 17, 0), build: '146' });
+    eq([data.format, data.version, data.app.build, data.exportedAt], [RECORDING_EXPORT_FORMAT, RECORDING_EXPORT_VERSION, '146', '2026-11-21T17:00:00.000Z'],
+       'export: the JSON names its format, version, the app build and when it was made');
+    eq(data.recording, { id: 9, title: 'Kitchen plans', recordedAt: '2026-11-21T16:30:00.000Z', durationMs: 61000 },
+       'export: and the recording it holds');
+    eq(data.aiInstructions, 'Answer in Dutch.', 'export: and the AI instructions');
+    eq(data.context.map(item => [item.index, item.kind, item.sourceRecordingId, item.userInput, item.aiReply]),
+       [[1, 'continued', 3, 'what I said last week', 'what the AI answered last week'],
+        [2, 'linked', 4, 'a linked note', ''],
+        [3, 'pasted', null, 'a pasted article', '']],
+       'export: every context item, with what kind it is, where it came from, what the person said and what the AI replied');
+    eq(data.transcripts.map(t => [t.id, t.source, t.shown, t.text, t.timestampedText]),
+       [['tOld', 'L', false, 'the live reading', '[00:01] the live reading'],
+        ['tNew', 'S', true, 'the newer reading', '[00:01] the newer reading']],
+       'export: every transcript, oldest first, marking the one shown, with and without timestamps');
+    eq(data.replies.map(s => [s.id, s.transcriptId, s.model, s.ended, s.contextShortened, s.text]),
+       [['s2', 'tOld', 'qwen3:8b', 'complete', false, 'An answer to the live reading.'],
+        ['s1', 'tNew', 'gemma4:e4b', 'complete', true, 'The first answer.'],
+        ['s3', 'tNew', 'qwen3:8b', 'cutoff', false, 'The second answer.']],
+       'export: every reply, with its transcript, model and how it ended');
+    ok(!/hidden reasoning|secret inline reasoning|thinking/.test(JSON.stringify(data)),
+       'export: the JSON holds no thinking either');
+    eq(recordingExportName({ title: 'Plans: kitchen / hall?' }), 'Plans- kitchen - hall.zip',
+       'export: the ZIP is named after the recording, safely');
+
+    const json = JSON.stringify(data, null, 2);
+    const parts = zipFiles([{ name: 'recording.json', text: json, timestamp: Date.UTC(2026, 10, 21, 17, 0) }]);
+    const zip = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
+    parts.reduce((at, part) => { zip.set(part, at); return at + part.length; }, 0);
+    const view = new DataView(zip.buffer);
+    const nameLength = view.getUint16(26, true);
+    const size = view.getUint32(18, true);
+    const body = zip.subarray(30 + nameLength, 30 + nameLength + size);
+    const end = zip.length - 22;
+    ok(view.getUint32(0, true) === 0x04034B50 && view.getUint32(end, true) === 0x06054B50 && view.getUint16(end + 10, true) === 1,
+       'export: the ZIP is one local entry and a directory naming it');
+    eq(new TextDecoder().decode(zip.subarray(30, 30 + nameLength)), 'recording.json', 'export: the entry is recording.json');
+    ok(new TextDecoder().decode(body) === json && view.getUint32(14, true) === crc32Final(crc32Update(crc32Init(), body)),
+       'export: holding the JSON whole, with its checksum');
+}
+
 console.log(`\n${'─'.repeat(60)}`);
 reported = true;
 if (failed === 0) {

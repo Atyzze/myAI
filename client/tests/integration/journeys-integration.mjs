@@ -1324,6 +1324,47 @@ try {
     ok(copiedMark === '✓' && clipboard === pasted,
        `tapping 📋 puts the whole text on the clipboard, not the shortened preview (${copiedMark}, ${clipboard.length} of ${pasted.length} chars)`);
 
+    journey('📑, the fourth button under a recording, asks which of three first, and copies the recording whole only once chosen');
+    const exportRow = await app.evaluate(`(async () => {
+        const { dbExec } = await import('/src/js/db.js'); const { CONFIG } = await import('/src/js/config.js');
+        const id = await dbExec(CONFIG.STORE_REC, 'add', { filename: 'to compare', title: 'To compare', timestamp: Date.now() + 90000,
+            durationMs: 1000, processing: false, captureState: 'ready',
+            transcripts: [{ id: 'tx', source: 'S', text: '[00:01] which car should I buy', plain: 'which car should I buy', time: Date.now() }],
+            summaries: [{ id: 'sx', transcriptId: 'tx', text: 'The small one.', model: 'qwen3:8b', time: Date.now(),
+                          thinking: 'weighing the cars in private' }],
+            contextChain: [{ inputText: 'the list of cars', outputText: '', text: '[Pasted Note]: the list of cars\\n',
+                             label: 'Pasted: now', pasted: true },
+                           { inputText: 'my budget', outputText: 'a budget answer', label: 'Linked from: last week', sourceRecId: 1,
+                             text: '[User Scribe Input]: my budget\\n[AI Summary/Reply Output]: a budget answer\\n' }] });
+        const gui = await import('/src/js/gui.js');
+        gui.resetListToFirstPage();
+        await gui.renderList({ force: true });
+        return id;
+    })()`);
+    const exportButtons = await app.evaluate(`[...document.querySelectorAll('#bottom-actions-${exportRow} button')]
+        .map(b => b.dataset.action + ':' + b.textContent.trim()).join(' ')`);
+    ok(exportButtons === 'deleteRec:🗑️ continueConv:💬 toggleLinkRec:🔗 exportRec:📑',
+       `a recording has four buttons at the bottom, 📑 the fourth (${exportButtons})`);
+    await app.evaluate(`navigator.clipboard.writeText('left alone')`, { userGesture: true });
+    await app.evaluate(`document.querySelector('#rec-${exportRow} [data-action="exportRec"]').click(); true`, { userGesture: true });
+    const exportOpened = await waitFor(app, `(() => { const o = document.getElementById('exportOverlay');
+        return o.classList.contains('open') && getComputedStyle(o).display !== 'none'
+            && [...o.querySelectorAll('.export-choice')].filter(b => b.offsetParent !== null).length === 3 ? 'open' : ''; })()`, 5000);
+    const untouched = await app.evaluate('navigator.clipboard.readText().catch(err => "read failed: " + err.name)', { userGesture: true });
+    ok(exportOpened === 'open' && untouched === 'left alone', 'a tap on 📑 shows the three choices and copies nothing yet');
+    await app.evaluate(`document.getElementById('exportCopyAll').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
+    const exportClosed = await waitFor(app, `document.getElementById('exportOverlay').classList.contains('open') ? '' : 'closed'`, 5000);
+    ok(exportClosed === 'closed', 'Escape closes the choices');
+    await app.evaluate(`document.querySelector('#rec-${exportRow} [data-action="exportRec"]').click(); true`, { userGesture: true });
+    await waitFor(app, `document.getElementById('exportOverlay').classList.contains('open') ? 'open' : ''`, 5000);
+    await app.evaluate(`document.getElementById('exportCopyAll').click(); true`, { userGesture: true });
+    const exportMark = await waitFor(app,
+        `(() => { const t = document.querySelector('#rec-${exportRow} [data-action="exportRec"]').textContent; return t !== '📑' ? t : ''; })()`, 5000);
+    const exported = await app.evaluate('navigator.clipboard.readText().catch(err => "read failed: " + err.name)', { userGesture: true });
+    ok(exportMark === '✓' && exported.includes('the list of cars') && exported.includes('a budget answer')
+       && exported.includes('which car should I buy') && exported.includes('The small one.') && !exported.includes('weighing the cars'),
+       `📋 Copy everything puts every context item, the transcript and the reply on the clipboard, never the thinking (${exportMark}, ${exported.slice(0, 300)})`);
+
     journey('On a phone, an opened context item scrolls by itself: ▶ starts and pauses, the speed button opens '
         + 'a popup to set the speed, Escape closes only that popup, and the controls leave with the view');
     await app.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 760, deviceScaleFactor: 1, mobile: true });

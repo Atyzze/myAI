@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="myai-build" content="145">
+<meta name="myai-build" content="146">
 
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'self';
@@ -139,6 +139,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .btn-link:hover { background: #163d1e; color: #81c784; border-color: #81c784; }
 .btn-link.linked { background: #4caf50; color: #04120a; border-style: solid; border-color: #4caf50; }
 .btn-link.linked:hover { background: #5bc763; border-color: #5bc763; color: #04120a; }
+.btn-export { background: #0a1c2b; border-color: #4fa3e0; color: #4fa3e0; }
+.btn-export:hover { background: #10293d; color: #8cc4ee; border-color: #8cc4ee; }
+.btn-export.copied { border-style: solid; }
 
 #link-tray { position: fixed; left: 0; right: 0; bottom: 0; z-index: 250; display: none; flex-direction: column; gap: 8px; max-width: 640px; margin: 0 auto; background: #071209; border: 1px solid #2a6b3a; border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: 0 -4px 16px rgba(0,0,0,.6); padding: 10px 14px calc(12px + env(safe-area-inset-bottom,0px)); }
 #link-tray.show { display: flex; }
@@ -226,6 +229,15 @@ body.compact .action-panel { border: none; background: none; padding: 0; margin:
 #pasteText{width:100%;box-sizing:border-box;min-height:45vh;flex:1;resize:vertical;background:#050f08;color:#cfe8d2;border:1px solid #2a6b3a;border-radius:8px;padding:10px;font:13px/1.45 monospace}
 #pasteCount{font:12px/1.4 monospace;color:#8a8a8a}
 #pasteCount.over{color:#d79a3a}
+#exportOverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:320;align-items:flex-start;justify-content:center;padding-top:60px}
+#exportOverlay.open{display:flex}
+#exportPanel{background:#111;border:1px solid #444;border-radius:16px;padding:16px;width:min(460px,94vw);max-height:88vh;overflow-y:auto;text-align:left;display:flex;flex-direction:column;gap:10px}
+#exportPanel h2{margin:0;font-size:1.1em}
+#exportHint{overflow-wrap:anywhere}
+.export-choice{display:flex;flex-direction:column;align-items:flex-start;gap:4px;width:100%;text-align:left;padding:12px 14px;background:#0a1c2b;border-color:#2c5f86;color:#8cc4ee;font-size:15px}
+.export-choice:hover,.export-choice:focus-visible{border-color:#8cc4ee;background:#10293d}
+.export-choice:disabled{opacity:.45;cursor:default}
+.export-choice-info{font-weight:normal;font-size:12px;line-height:1.4;color:#9ab}
 .paste-actions{display:flex;gap:10px;justify-content:flex-end}
 .paste-actions button{padding:10px 16px}
 #pasteUse{border-color:#4caf50;color:#4caf50}
@@ -488,6 +500,7 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <p><strong>📋</strong> beside Start Recording begins a recording that remembers whatever is on the clipboard: the pasted text is attached as context and goes to the AI with the note, exactly like <strong>💬 Continue</strong> does with an earlier recording. If the browser will not hand over the clipboard, or it is empty, a box opens to paste or type into instead, holding up to 100,000 characters with line breaks intact. During a recording, 📋 stays where it is and adds whatever is on the clipboard to that recording as one more context item, so something you find halfway through still reaches the AI reply; the live row says how many items the recording carries. It appears in the note's context block, where it can be inspected or removed: tap its text to read it whole, and the 📋 beside it copies the whole text back to the clipboard.</p>
 
     <p><strong>⬇️ Download</strong> saves the recording as a file. <strong>🗑️ Delete</strong> removes it. <strong>💬 Continue</strong> records a follow-up that remembers this note. <strong>🔗 Link</strong> bundles several recordings for one follow-up. The small 🗑️ beside ▶ deletes only the audio and keeps the text.</p>
+    <p><strong>📑</strong>, the fourth button at the bottom of a recording after 🗑️, 💬 and 🔗, takes all of its text elsewhere, for example to ask a bigger AI the same thing. It asks first: <strong>📋 Copy everything</strong> copies its context items (continued, linked and pasted), the transcript and the AI replies to it; <strong>🎤 Copy without AI replies</strong> copies the context and the transcript only, exactly what the AI was given and never shortened; <strong>📦 Download .zip</strong> saves every transcript, reply and context item of the recording as structured JSON. The AI's thinking is never included, and neither is the audio. The copies use the transcript the recording shows, and include your AI instructions from Settings.</p>
 
     <h3>🟢 LIVE and tabs</h3>
     <p>The recording in progress shows a LIVE badge. Only one tab records at a time; other tabs show <strong>LIVE · OTHER TAB</strong>. After Stop the recording says <strong>Saving…</strong> until it is saved. If a tab is closed during a recording, any tab still open recovers what it stored, within a minute and without a reload; until then the recording offers <strong>Recover now</strong> and Delete. If the whole app was closed, by a crash or by the phone, the recording is recovered as soon as the app is opened again, and its row says whether that happened while recording or at which step of Stop. What the app was doing at the time is in <strong>🧾 Open system logs</strong> at the top of this page.</p>
@@ -765,6 +778,19 @@ body.live-scribe-on.viz-fullscreen #live-scribe{top:0;bottom:auto;height:50vh;z-
     <div class="paste-actions">
       <button id="pasteCancel" class="action-btn">Cancel</button>
       <button id="pasteUse" class="action-btn">Use this text</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportOverlay" aria-hidden="true">
+  <div id="exportPanel" role="dialog" aria-modal="true" aria-labelledby="exportTitle" tabindex="-1">
+    <h2 id="exportTitle">📑 Copy or download this recording</h2>
+    <div class="settings-hint" id="exportHint"></div>
+    <button id="exportCopyAll" class="action-btn export-choice">📋 Copy everything<span class="export-choice-info" id="exportCopyAllInfo"></span></button>
+    <button id="exportCopyUser" class="action-btn export-choice">🎤 Copy without AI replies<span class="export-choice-info" id="exportCopyUserInfo"></span></button>
+    <button id="exportZip" class="action-btn export-choice">📦 Download .zip<span class="export-choice-info" id="exportZipInfo"></span></button>
+    <div class="paste-actions">
+      <button id="exportCancel" class="action-btn">Cancel</button>
     </div>
   </div>
 </div>

@@ -42,6 +42,10 @@ Speaker naming is deliberately confirm-before-apply. When conversation evidence 
 
 The 📋 button beside Start Recording begins a recording that carries the clipboard's text as context. A pasted note becomes an ordinary context item on the recording, so it is shown, fed to the AI, exported, retained and deleted on exactly the same terms as context carried over from an earlier recording. Oversized pastes are capped rather than sent whole.
 
+## Taking a recording to another AI
+
+📑, the fourth button under a recording, asks first and then copies or downloads all of the recording's text, to ask a bigger AI the same thing and compare. **Copy everything** copies every context item (continued, linked and pasted), the transcript the recording shows and the AI replies to it. **Copy without AI replies** copies the context and the transcript only: exactly the prompt the local AI was given, never shortened. **Download .zip** saves `recording.json`, the whole recording as structured JSON. The AI's thinking and the audio are never included.
+
 ## Reading an opened text hands-free
 
 An opened reply, transcript or context item can scroll by itself, for reading it aloud while recording. ▶ at the bottom right starts and pauses it; the speed button beside it opens a popup with a slider and - and + to set how many lines a minute go by. A finger or the mouse on the text holds it still, scrolling by hand moves the reading position and it carries on from there, and it stops at the end; ▶ there starts again from the top. The speed is remembered in this browser. The controls work the same in the in-page view and in a pop-up window. Live views, which follow their own growing text, have none.

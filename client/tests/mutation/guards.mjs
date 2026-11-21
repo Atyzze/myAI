@@ -4150,4 +4150,92 @@ export const mutations = [
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /each piece of reasoning says how long the model has been reasoning/
     },
+    {
+        id: 'MUT-EXPORT-THINKING-COPIED',
+        file: 'src/js/export-core.js',
+        from: '        .map(s => ({ ...s, text: withoutThinking(s.text) }))',
+        to: "        .map(s => ({ ...s, text: [s.thinking, s.text].filter(Boolean).join('\\n') }))",
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /the AI's thinking is never copied/
+    },
+    {
+        id: 'MUT-EXPORT-INLINE-THINKING-KEPT',
+        file: 'src/js/export-core.js',
+        from: "    return String(text || '').replace(/<think>[\\s\\S]*?<\\/think>\\s*/gi, '').trim();",
+        to: "    return String(text || '').trim();",
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /reasoning a model wrote into its answer is taken out/
+    },
+    {
+        id: 'MUT-EXPORT-REPLIES-IN-USER-COPY',
+        file: 'src/js/export-core.js',
+        from: '    const replies = withReplies && shown ? repliesTo(rec, shown.id) : [];',
+        to: '    const replies = shown ? repliesTo(rec, shown.id) : [];',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /copy without AI replies is exactly the prompt/
+    },
+    {
+        id: 'MUT-EXPORT-CONTEXT-DROPPED',
+        file: 'src/js/export-core.js',
+        from: '    const parts = [composeFullPrompt({ instructions, chain, transcript })];',
+        to: '    const parts = [composeFullPrompt({ instructions, chain: [], transcript })];',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /it carries every context item, continued, linked and pasted/
+    },
+    {
+        id: 'MUT-EXPORT-SHORTENED',
+        file: 'src/js/export-core.js',
+        from: "import { composeFullPrompt } from './reply-core.js';",
+        to: "import { buildBudgetedPrompt } from './reply-core.js';\nconst composeFullPrompt = args => buildBudgetedPrompt(args).prompt;",
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /context too long for the local model is copied whole/
+    },
+    {
+        id: 'MUT-EXPORT-WRONG-TRANSCRIPT',
+        file: 'src/js/export-core.js',
+        from: '    return all.find(item => item.id == transcriptId) || all[0] || null;',
+        to: '    return all[0] || null;',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /the copy follows the transcript the row shows/
+    },
+    {
+        id: 'MUT-EXPORT-JSON-THINKING',
+        file: 'src/js/export-core.js',
+        from: '            contextShortened: !!s.condensed,',
+        to: '            contextShortened: !!s.condensed,\n            thinking: s.thinking || null,',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /the JSON holds no thinking either/
+    },
+    {
+        id: 'MUT-EXPORT-ZIP-CHECKSUM',
+        file: 'src/js/backup-core.js',
+        from: '        const entry = { name: file.name, crc: crc32Final(crc32Update(crc32Init(), bytes)), size: bytes.length,',
+        to: '        const entry = { name: file.name, crc: 0, size: bytes.length,',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /holding the JSON whole, with its checksum/
+    },
+    {
+        id: 'MUT-EXPORT-BUTTON-MISSING',
+        file: 'src/js/gui.js',
+        from: '    ${linkBtn}\n    ${exportBtn}\n',
+        to: '    ${linkBtn}\n',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /a recording with text has four buttons at the bottom/
+    },
+    {
+        id: 'MUT-EXPORT-COPIES-ON-FIRST-TAP',
+        file: 'src/js/recording-export.js',
+        from: '    return new Promise(resolve => {\n        const teardown = () => {',
+        to: '    copyText(everything);\n    return new Promise(resolve => {\n        const teardown = () => {',
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /the first tap opens the three choices and copies nothing yet/
+    },
+    {
+        id: 'MUT-EXPORT-NOT-WIRED',
+        file: 'src/js/gui.js',
+        from: "            case 'exportRec': return openRecordingExport(recId, {",
+        to: "            case 'exportRecNever': return openRecordingExport(recId, {",
+        command: ['node', 'tests/unit/app-behaviour.test.mjs'],
+        expected: /opens the choices through the app's own buttons/
+    },
 ];

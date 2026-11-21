@@ -6,7 +6,8 @@ One image runs on almost anything: a workstation with a big NVIDIA card, a gamin
 
 ```
 client/   the browser app (PWA): recording, live transcript, up to 4 live translation
-          boxes, speaker numbers, replies, hands-free auto-scroll of opened texts, a system log; updates only on your tap. Build 144.
+          boxes, speaker numbers, replies, hands-free auto-scroll of opened texts, a system log, 📑 to copy or
+          download a recording's whole text for another AI; updates only on your tap. Build 146.
 calendar/ the calendar app (PWA): month, week, day and list, repeats, reminders, places,
           the same on every device and offline; the calendar itself lives on the box (CalDAV). Build 1.
 vts/      VTS, the in-memory Whisper transcription server. Build 23.
