@@ -44,4 +44,4 @@ Sixteen new mutation guards cover:
 
 One guard follows a line this build moved: the reply stream's initial state.
 
-GATE_RESULT
+22 suites passed (strict gate) in 12 min 21 s; slowest mutation-guards (7 min 15 s)
