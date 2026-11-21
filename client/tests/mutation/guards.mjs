@@ -4087,12 +4087,20 @@ export const mutations = [
         expected: /audio is read into memory before it is written/
     },
     {
-        id: 'MUT-AUDIO-OWN-BYTES-UNBOUNDED',
+        id: 'MUT-AUDIO-COPY-WHOLE',
         file: 'src/js/db.js',
-        from: '    if (blob.size > CONFIG.AUDIO_IN_MEMORY_MAX_BYTES) return blob;\n',
-        to: '',
+        from: '    const step = Math.max(1, CONFIG.AUDIO_COPY_SLICE_BYTES);',
+        to: '    const step = Math.max(1, blob.size);',
         command: ['node', 'tests/unit/storage-paths.test.mjs'],
-        expected: /audio too large to hold in memory is written as it is/
+        expected: /a recording of any length is copied too, a slice at a time/
+    },
+    {
+        id: 'MUT-AUDIO-COPY-CAPPED',
+        file: 'src/js/db.js',
+        from: "    if (!blob || typeof blob.slice !== 'function') return blob;",
+        to: "    if (!blob || typeof blob.slice !== 'function' || blob.size > 8) return blob;",
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /a recording of any length is copied too, a slice at a time/
     },
     {
         id: 'MUT-SAVE-STEP-UNFLUSHED',

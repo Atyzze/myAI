@@ -2224,7 +2224,7 @@
     },
     {
       "id": "SAVE-CRASH-001",
-      "title": "A save is counted on its recording before it begins and its count goes when it ends; a recording whose save the browser died during twice is no longer saved by itself at every launch but keeps all its pieces and offers Retry, the audio saved so far and Delete; a save after a crash takes the plainest way; audio is written as one plain in-memory file up to the in-memory limit; and every step of a save and of a transcription is in the system log, on disk before it begins",
+      "title": "A save is counted on its recording before it begins and its count goes when it ends; a recording whose save the browser died during twice is no longer saved by itself at every launch but keeps all its pieces and offers Retry, the audio saved so far and Delete; a save after a crash takes the plainest way; audio of any length is written as a plain in-memory copy, read a slice at a time; and every step of a save and of a transcription is in the system log, on disk before it begins",
       "suites": [
         "storage-paths",
         "pure",
@@ -2239,7 +2239,8 @@
         "MUT-CRASH-RECOVERY-NOT-PLAIN",
         "MUT-CRASH-RETRY-NOT-PLAIN",
         "MUT-AUDIO-OWN-BYTES-SKIPPED",
-        "MUT-AUDIO-OWN-BYTES-UNBOUNDED",
+        "MUT-AUDIO-COPY-WHOLE",
+        "MUT-AUDIO-COPY-CAPPED",
         "MUT-SAVE-STEP-UNFLUSHED",
         "MUT-SAVE-STEP-UNLOGGED",
         "MUT-TRANSCRIBE-UNLOGGED",

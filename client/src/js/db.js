@@ -169,15 +169,20 @@ export async function writeAudio(recId, blob) {
     return true;
 }
 
-// A blob that holds its own bytes: read once, in full, into memory. A blob made from pieces that
-// live in this same database (the 4-second pieces of a recording, or slices of a stored file) is
-// written as one plain file this way, and the browser is never asked to copy its own stored files
-// back into the database while writing to it. Audio over CONFIG.AUDIO_IN_MEMORY_MAX_BYTES is
-// left as it is rather than copied.
+// A blob that holds its own bytes, copied into memory. A blob made from pieces that live in this
+// same database (the 4-second pieces of a recording, or slices of a stored file) is written as a
+// plain file this way, and the browser is never asked to copy its own stored files back into the
+// database while writing to it. It is read a slice at a time (CONFIG.AUDIO_COPY_SLICE_BYTES), and
+// each slice becomes a blob of its own at once, so the page never holds more than one slice,
+// however long the recording; the browser keeps the copy.
 export async function blobWithOwnBytes(blob) {
-    if (!blob || typeof blob.arrayBuffer !== 'function') return blob;
-    if (blob.size > CONFIG.AUDIO_IN_MEMORY_MAX_BYTES) return blob;
-    return new Blob([await blob.arrayBuffer()], { type: blob.type || '' });
+    if (!blob || typeof blob.slice !== 'function') return blob;
+    const step = Math.max(1, CONFIG.AUDIO_COPY_SLICE_BYTES);
+    const parts = [];
+    for (let at = 0; at < blob.size; at += step) {
+        parts.push(new Blob([await blob.slice(at, Math.min(blob.size, at + step)).arrayBuffer()]));
+    }
+    return new Blob(parts, { type: blob.type || '' });
 }
 
 export async function commitAudio(recId, blob, mutate) {

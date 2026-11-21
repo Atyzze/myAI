@@ -1045,13 +1045,10 @@ async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, final
     }
     chunks.sort((a, b) => a.seq - b.seq);
     await ensureFinalizationHeadroom(chunks);
-    // The pieces are read once into memory and joined there (Build 145): everything after works on
-    // that copy, and what is written is one plain file, not one made of the stored pieces.
-    const joinedBytes = piecesBytes(chunks);
-    const inMemory = joinedBytes <= CONFIG.AUDIO_IN_MEMORY_MAX_BYTES;
-    await savingStep(recId, `joining ${piecesNote(chunks)} (${fmtBytes(joinedBytes)})${inMemory ? ' in memory' : ''}`);
-    const joined = new Blob(chunks.map(chunk => chunk.blob), { type: mime || 'audio/webm' });
-    const rawMaster = inMemory ? await blobWithOwnBytes(joined) : joined;
+    // The pieces are read into memory and joined there (Build 145): everything after works on that
+    // copy, and what is written is a plain file, not one made of the stored pieces.
+    await savingStep(recId, `joining ${piecesNote(chunks)} (${fmtBytes(piecesBytes(chunks))}) in memory`);
+    const rawMaster = await blobWithOwnBytes(new Blob(chunks.map(chunk => chunk.blob), { type: mime || 'audio/webm' }));
     await savingStep(recId, 'measuring');
     let fileMs = null;
     try { fileMs = await webmAudioEndMs(rawMaster); } catch (_) { fileMs = null; }

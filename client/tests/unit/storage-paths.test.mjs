@@ -685,24 +685,32 @@ const unfinishedOpus = (fields = {}) => addRecording({ format: 'opus', mime: 'au
 }
 
 {
-    class CountingBlob extends Blob {
-        reads = 0;
-        arrayBuffer() { this.reads++; return super.arrayBuffer(); }
+    // A blob whose reads are watched: how many slices are read, and the largest one.
+    class WatchedBlob extends Blob {
+        slices = [];
+        slice(from, to, type) {
+            this.slices.push(Math.min(this.size, to ?? this.size) - (from ?? 0));
+            return super.slice(from, to, type);
+        }
     }
+    const bytes = n => Uint8Array.from({ length: n }, (_, i) => (i * 7 + 3) % 256);
     const id = await addRecording({ format: 'opus', mime: 'audio/webm' });
-    const small = new CountingBlob([new Uint8Array([1, 2, 3, 4])], { type: 'audio/webm' });
+    const small = new WatchedBlob([bytes(4)], { type: 'audio/webm' });
     await db.commitAudio(id, small, rec => { rec.audioBytes = small.size; return rec; });
     const stored = await db.readAudio(id);
-    ok(small.reads === 1 && stored && stored.size === 4 && stored.type === 'audio/webm'
-       && [...new Uint8Array(await stored.arrayBuffer())].join() === '1,2,3,4',
-       `own bytes: audio is read into memory before it is written, so what is stored is one plain file, the same bytes (${small.reads} reads)`);
-    const limit = CONFIG.AUDIO_IN_MEMORY_MAX_BYTES;
-    CONFIG.AUDIO_IN_MEMORY_MAX_BYTES = 3;
-    const large = new CountingBlob([new Uint8Array([5, 6, 7, 8])], { type: 'audio/webm' });
-    await db.commitAudio(id, large, rec => rec);
-    CONFIG.AUDIO_IN_MEMORY_MAX_BYTES = limit;
-    ok(large.reads === 0 && [...new Uint8Array(await (await db.readAudio(id)).arrayBuffer())].join() === '5,6,7,8',
-       'own bytes: and audio too large to hold in memory is written as it is');
+    ok(small.slices.length === 1 && stored && stored.size === 4 && stored.type === 'audio/webm'
+       && [...new Uint8Array(await stored.arrayBuffer())].join() === [...bytes(4)].join(),
+       `own bytes: audio is read into memory before it is written, so what is stored is a plain file, the same bytes (${small.slices.length} reads)`);
+
+    const step = CONFIG.AUDIO_COPY_SLICE_BYTES;
+    CONFIG.AUDIO_COPY_SLICE_BYTES = 3;
+    const long = new WatchedBlob([bytes(4), bytes(6)], { type: 'audio/webm' });
+    await db.commitAudio(id, long, rec => rec);
+    CONFIG.AUDIO_COPY_SLICE_BYTES = step;
+    const expected = [...bytes(4), ...bytes(6)].join();
+    ok(long.slices.length === 4 && Math.max(...long.slices) <= 3
+       && [...new Uint8Array(await (await db.readAudio(id)).arrayBuffer())].join() === expected,
+       `own bytes: a recording of any length is copied too, a slice at a time, so the page never holds more than one slice; the bytes are the same, in order (${JSON.stringify(long.slices)})`);
     await clearAll();
 }
 
