@@ -4599,6 +4599,31 @@ eq(normalizeClipboardText('trailing   \nspace'), 'trailing\nspace',
 }
 
 {
+    const { beginSave, markSaveHalted, markFinalized, markSaveFailed, saveCrashes } = await import('../../src/js/finalize-core.js');
+    const unfinished = (fields = {}) => ({ id: 4, timestamp: 1, durationMs: 1000, processing: true, captureState: 'finalizing',
+                                           finalizerId: 'f', finalizerHeartbeatAt: 2, ...fields });
+    eq(beginSave(unfinished()).saveAttempts, 1, 'save count: a save is counted on its recording before it begins');
+    eq(beginSave(unfinished({ saveAttempts: 1 })).saveAttempts, 2,
+       'save count: one begun after a save the browser died during counts on from it, also when automatic');
+    const halted = beginSave(unfinished({ saveAttempts: 2 }), { limit: 2, now: 9 });
+    ok(halted.saveHalted && halted.saveAttempts === 2 && halted.processing && halted.captureState === 'finalize-error'
+       && /closed the browser 2 times/.test(halted.finalizationError) && halted.finalizationErrorAt === 9 && !('finalizerId' in halted),
+       'save count: an automatic save of one the browser died saving twice does not begin: it stops, says why, and is let go');
+    ok(beginSave(unfinished({ saveAttempts: 1, saveHalted: true })).saveHalted,
+       'save count: nor does one of a recording already stopped that way');
+    const byHand = beginSave(unfinished({ saveAttempts: 2, saveHalted: true }), { automatic: false });
+    ok(byHand.saveAttempts === 3 && !('saveHalted' in byHand) && byHand.captureState === 'finalizing',
+       'save count: a save by hand always begins, and is counted too');
+    ok(/closed the browser once/.test(markSaveHalted(unfinished(), { crashes: 1 }).finalizationError),
+       'save count: the message counts in words');
+    ok(['saveAttempts', 'saveHalted'].every(key => !(key in markFinalized(unfinished({ saveAttempts: 3, saveHalted: true }), 1000))
+                                                  && !(key in markSaveFailed(unfinished({ saveAttempts: 3, saveHalted: true }), { error: 'x' }))),
+       'save count: a save that ends, saved or failed, takes its count away: the browser did not die during it');
+    ok(saveCrashes({ saveAttempts: '2' }) === 2 && saveCrashes({}) === 0 && saveCrashes(null) === 0 && saveCrashes({ saveAttempts: -1 }) === 0,
+       'save count: read as a number, never below zero');
+}
+
+{
     const { unfinishedRowState, ROW_ACTION_LABELS } = await import('../../src/js/row-state-core.js');
     const rec = { id: 7, processing: true, captureState: 'recording' };
     eq(unfinishedRowState(rec, { liveHere: true }).kind, 'recording', 'row: the recording this tab is capturing is shown live');

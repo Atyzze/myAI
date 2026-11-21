@@ -341,6 +341,33 @@ const said = () => script.map(utterance => utterance.text).join(' ');
        `segments: one segment the server sent without text does not take the rest of its chunk down with it (${saved && saved.text})`);
 }
 
+{
+    // Build 145: transcription leaves its progress in the system log too, on disk before it reads
+    // the audio and before it sends the first chunk, so a browser that dies during it says where.
+    const debugLog = await import('../../src/js/debug-log.js');
+    await debugLog.installSystemLog({ build: 'test' });
+    script = [{ from: 5, to: 7, text: 'Logged on the way.' }];
+    const id = await storedRecording(90);
+    const reads = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (...args) => {
+        reads.push(memoryIdb.rows('entries', debugLog.LOG_DB_NAME)
+            .filter(entry => entry.c === 'transcribe' && entry.m.startsWith(`recording ${id}: `)).length);
+        return realFetch(...args);
+    };
+    await transcribe.transcribeChunked(id, () => {});
+    globalThis.fetch = realFetch;
+    await debugLog.flushSystemLog(2000);
+    const lines = memoryIdb.rows('entries', debugLog.LOG_DB_NAME)
+        .filter(entry => entry.c === 'transcribe' && entry.m.startsWith(`recording ${id}: `)).map(entry => entry.m);
+    const at = pattern => lines.findIndex(line => pattern.test(line));
+    ok(at(/: reading the audio$/) >= 0 && at(/: reading the audio$/) < at(/Starting server transcription/)
+       && at(/Starting server transcription/) < at(/📦 \d+ chunks/) && at(/📦 \d+ chunks/) < at(/✅ Done/),
+       `log: the system log holds the transcription's progress, in order (${JSON.stringify(lines)})`);
+    ok(reads.length > 0 && reads[0] >= 3,
+       `log: and its first steps are on disk before the first chunk is sent (${reads[0]} lines by then)`);
+}
+
 memoryIdb.reset();
 console.log(`✓ all ${assertions} saved-transcript assertions passed`);
 emitTestResult('saved-transcripts', 'pass', { assertions });

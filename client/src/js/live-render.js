@@ -254,6 +254,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
     let gatheredThinking = '';
     let thinkingShown = 0;
     let thinkingFolded = false;
+    let thinkingElapsedMs = 0;
     let tokenCount = 0;
     let elapsedMs = 0;
     let model = '';
@@ -262,9 +263,14 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
     let generation = 0;
     const schedule = oncePerFrameScheduler(frame);
 
-    const rate = () => {
-        if (tokenCount < 2 || elapsedMs <= 0) return null;
-        return (tokenCount / (elapsedMs / 1000));
+    const tokensPerSecond = (count, ms) => (count < 2 || ms <= 0 ? null : count / (ms / 1000));
+    const rate = () => tokensPerSecond(tokenCount, elapsedMs);
+
+    // While the model reasons, its speed shows as well, from its first tokens on (Build 145).
+    const thinkingLine = () => {
+        const perSecond = tokensPerSecond(thinkingCount, thinkingElapsedMs);
+        return perSecond === null ? `${thinkingCount} thinking tok`
+                                  : `${thinkingCount} thinking tok · ${perSecond.toFixed(1)} tok/s`;
     };
 
     const progressLine = () => {
@@ -352,10 +358,11 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 writeGatheredTokensOnNextFrame();
             } else if (msg.type === 'thinking') {
                 if (Number.isFinite(msg.count)) thinkingCount = msg.count;
+                if (Number.isFinite(msg.elapsedMs)) thinkingElapsedMs = msg.elapsedMs;
                 if (msg.folded) thinkingFolded = true;
                 if (!charCount) {
                     setText(statusEl, thinkingLabel());
-                    setText(footerEl, `${thinkingCount} thinking tok`);
+                    setText(footerEl, thinkingLine());
                 }
                 const piece = String(msg.text ?? '');
                 if (piece) {
@@ -383,6 +390,7 @@ export function createReplyRenderer({ replyEl, textEl, cursorEl, statusEl, foote
                 textEl.textContent = '';
                 charCount = 0;
                 thinkingCount = 0;
+                thinkingElapsedMs = 0;
                 tokenCount = 0;
                 elapsedMs = 0;
                 if (cursorEl) cursorEl.style.display = '';

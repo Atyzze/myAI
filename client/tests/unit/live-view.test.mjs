@@ -685,6 +685,9 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     thinker.handle({ type: 'thinking', count: 42 });
     ok(thinkStatus.textContent === '🤔 Thinking - qwen3:8b' && thinkFooter.textContent === '42 thinking tok',
        'a model still reasoning is shown thinking, with how far it is, instead of nothing');
+    thinker.handle({ type: 'thinking', count: 84, elapsedMs: 4000 });
+    ok(thinkFooter.textContent === '84 thinking tok · 21.0 tok/s',
+       `while the model reasons, its speed shows as well, not only once the answer begins (${thinkFooter.textContent})`);
     thinker.handle({ type: 'model', model: 'qwen3:8b' });
     ok(thinkStatus.textContent === '🤔 Thinking - qwen3:8b', 'naming the model again keeps it thinking');
     thinker.handle({ type: 'token', token: 'Yes', count: 1, elapsedMs: 0 });
@@ -748,6 +751,20 @@ ok(!/<\/title>[^]*<\/title>/.test(hostile), 'the title element cannot be termina
     ok(replayedThinking && replayedThinking.text === 'Hmm, the budget.' && replayedThinking.count === 2
        && replayed.indexOf(replayedThinking) < replayed.findIndex(msg => msg.type === 'token'),
        `a view opened later is shown the reasoning so far, before the answer (${JSON.stringify(replayed)})`);
+    ok(Number.isFinite(replayedThinking.elapsedMs) && replayedThinking.elapsedMs >= 0,
+       'and how long the model has been reasoning, so it shows the speed too');
+
+    // The stream times the reasoning from its first piece, for the speed shown while it lasts.
+    const timedGen = live.replyStreamInit(907);
+    const timed = [];
+    const stopTimed = live.subscribeReplyStream(907, msg => timed.push(msg));
+    live.replyStreamThinking(907, 1, timedGen, 'One');
+    await new Promise(resolve => setTimeout(resolve, 40));
+    live.replyStreamThinking(907, 2, timedGen, ' two');
+    stopTimed();
+    const timedThinking = timed.filter(msg => msg.type === 'thinking');
+    ok(timedThinking.length === 2 && timedThinking[0].elapsedMs === 0 && timedThinking[1].elapsedMs >= 30,
+       `each piece of reasoning says how long the model has been reasoning (${timedThinking.map(msg => msg.elapsedMs)})`);
 
     renderer.handle({ type: 'reset' });
     ok(textEl.textContent === '' && cursorEl.style.display === '',

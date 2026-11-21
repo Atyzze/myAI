@@ -15,6 +15,13 @@ export const CONFIG = {
     RETENTION_SWEEP_MS:     60000,
 
     OPUS_CONVERT_MAX_MS:  10 * 60 * 1000,
+    // Audio up to this size is copied into memory before it is written, so the browser stores one
+    // plain file instead of a file made of pieces it reads from the same database (Build 145). Opus
+    // at 32 kbps stays under it for about four and a half hours, 48 kHz WAV for about ten minutes.
+    AUDIO_IN_MEMORY_MAX_BYTES: 64 * 1024 * 1024,
+    // A recording whose save was begun this many times without ending (the browser died during
+    // it) is no longer saved automatically; its row offers to retry, download or delete it.
+    SAVE_CRASH_LIMIT:     2,
     REMOTE_FIRST_BYTE_TIMEOUT_MS: 45000,
     REMOTE_IDLE_TIMEOUT_MS: 60000,
     MODEL_LOAD_BUDGET_MS:   600000,

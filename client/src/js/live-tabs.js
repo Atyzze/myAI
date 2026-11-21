@@ -1,3 +1,4 @@
+import { logEvent } from './debug-log.js';
 import { escapeHtml } from './config.js';
 import { openInlineLiveView, inlineLiveViewKey } from './live-inline.js';
 import { createLiveLogRenderer, createReplyRenderer } from './live-render.js';
@@ -67,7 +68,10 @@ export function liveLogInit(recId)  {
 }
 export function liveLogClear(recId) { return liveLogInit(recId); }
 
+// A recording's progress lines also go to the system log (Build 145), so what transcription was
+// doing when something went wrong can be read back afterwards.
 export function liveLogAppend(recId, line) {
+  logEvent('transcribe', `recording ${recId}: ${line}`);
   if (!_liveLogs[recId]) liveLogInit(recId);
   _liveLogs[recId].meta.push(line);
   _liveLogs[recId].listeners.forEach(fn => fn({ type: 'meta', line }));
@@ -142,7 +146,7 @@ const _replyStreamOrder = [];
 export function replyStreamInit(recId)   {
   return resetEntry(_replyStreams, _replyStreamOrder, recId,
                     { tokens: '', count: 0, firstAt: 0, lastAt: 0, model: '', thinking: 0, thinkingText: '',
-                      done: false, end: null })
+                      thinkingFirstAt: 0, thinkingLastAt: 0, done: false, end: null })
          .generation;
 }
 
@@ -169,15 +173,24 @@ export function replyStreamAppend(recId, token, generation = null) {
 }
 
 // The model is still reasoning before its answer: count goes up with each piece of thinking, and
-// text is that piece, kept so a view opened later shows the reasoning so far.
+// text is that piece, kept so a view opened later shows the reasoning so far. elapsedMs is how long
+// it has been thinking, so the view shows its speed from the first tokens on (Build 145).
 export function replyStreamThinking(recId, count, generation = null, text = '') {
   if (!_replyStreams[recId]) replyStreamInit(recId);
   const entry = _replyStreams[recId];
   if (!ownsEntry(entry, generation)) return;
+  const now = Date.now();
   const piece = String(text || '');
   entry.thinking = Math.max(0, Number(count) || 0);
   entry.thinkingText += piece;
-  entry.listeners.forEach(fn => fn({ type: 'thinking', count: entry.thinking, text: piece }));
+  if (!entry.thinkingFirstAt) entry.thinkingFirstAt = now;
+  entry.thinkingLastAt = now;
+  const elapsedMs = thinkingElapsedMs(entry);
+  entry.listeners.forEach(fn => fn({ type: 'thinking', count: entry.thinking, text: piece, elapsedMs }));
+}
+
+function thinkingElapsedMs(entry) {
+  return Math.max(0, (entry.thinkingLastAt || 0) - (entry.thinkingFirstAt || 0));
 }
 
 // end says how the reply ended ({ state, reason }: complete, cutoff, interrupted, error, stopped),
@@ -201,6 +214,7 @@ function replyStreamSnapshot(entry) {
   if (entry.model) messages.push({ type: 'model', model: entry.model });
   if (entry.thinking) {
     messages.push({ type: 'thinking', count: entry.thinking, text: entry.thinkingText || '',
+                    elapsedMs: thinkingElapsedMs(entry),
                     ...(entry.thinkingFolded ? { folded: true } : {}) });
   }
   if (entry.tokens) {
