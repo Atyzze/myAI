@@ -1,4 +1,4 @@
-const VERSION     = 'v145';
+const VERSION     = 'v146';
 const SHELL_CACHE = `myai-shell-${VERSION}`;
 // From this build on, a new worker waits until a page asks it to take over (version.js). The pages
 // of earlier builds cannot ask, and expect it to take over by itself.
@@ -45,6 +45,8 @@ const SHELL = [
     './src/js/live-scribe-core.js',
     './src/js/live-refine-core.js',
     './src/js/backup-core.js',
+    './src/js/export-core.js',
+    './src/js/recording-export.js',
     './src/js/diarize-core.js',
     './src/js/runway-core.js',
     './src/js/speaker-infer-core.js',

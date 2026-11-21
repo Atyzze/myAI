@@ -95,6 +95,25 @@ export function uniqueEntryName(name, taken) {
     }
 }
 
+// A whole ZIP of small in-memory files, stored uncompressed, as the parts of one Blob (Build 146).
+export function zipFiles(files) {
+    const parts = [];
+    const central = [];
+    let offset = 0;
+    for (const file of files || []) {
+        const bytes = file.bytes instanceof Uint8Array ? file.bytes : encoder.encode(String(file.text ?? ''));
+        const entry = { name: file.name, crc: crc32Final(crc32Update(crc32Init(), bytes)), size: bytes.length,
+                        timestamp: file.timestamp, offset };
+        const header = localHeader(entry);
+        parts.push(header, bytes);
+        central.push(centralHeader(entry));
+        offset += header.length + bytes.length;
+    }
+    const directorySize = central.reduce((sum, item) => sum + item.length, 0);
+    parts.push(...central, endOfCentralDirectory(central.length, directorySize, offset));
+    return parts;
+}
+
 export function zipArchiveBytes(entries) {
     const list = entries || [];
     const probe = entry => ({ name: entry.name, size: 0, crc: 0, offset: 0, timestamp: 0 });

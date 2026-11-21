@@ -2257,6 +2257,28 @@
         "MUT-THINKING-SPEED-HIDDEN",
         "MUT-THINKING-UNTIMED"
       ]
+    },
+    {
+      "id": "RECORDING-EXPORT-001",
+      "title": "📑, the fourth button under a recording with text or context, asks which of three before it acts: Copy everything copies every context item, the transcript the row shows and the AI replies to it; Copy without AI replies copies exactly the prompt 🧠 Reply sends, never shortened; Download .zip saves recording.json with every context item, transcript and reply; the AI's thinking is in none of them",
+      "suites": [
+        "pure",
+        "app-behaviour",
+        "user-journeys"
+      ],
+      "mutationGuards": [
+        "MUT-EXPORT-THINKING-COPIED",
+        "MUT-EXPORT-INLINE-THINKING-KEPT",
+        "MUT-EXPORT-REPLIES-IN-USER-COPY",
+        "MUT-EXPORT-CONTEXT-DROPPED",
+        "MUT-EXPORT-SHORTENED",
+        "MUT-EXPORT-WRONG-TRANSCRIPT",
+        "MUT-EXPORT-JSON-THINKING",
+        "MUT-EXPORT-ZIP-CHECKSUM",
+        "MUT-EXPORT-BUTTON-MISSING",
+        "MUT-EXPORT-COPIES-ON-FIRST-TAP",
+        "MUT-EXPORT-NOT-WIRED"
+      ]
     }
   ],
   "untestedModules": []

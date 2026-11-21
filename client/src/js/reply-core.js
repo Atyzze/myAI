@@ -133,6 +133,12 @@ function composePrompt(instructions, chain, transcript) {
     return prompt;
 }
 
+// The prompt 🧠 Reply sends, whole: what buildBudgetedPrompt starts from before it shortens
+// anything to fit the local model (Build 146).
+export function composeFullPrompt({ instructions = '', chain = [], transcript = '' } = {}) {
+    return composePrompt(String(instructions || '').trim(), chain || [], String(transcript || ''));
+}
+
 export const MIN_CONTEXT_TOKENS = 512;
 
 export function buildBudgetedPrompt({ instructions = '', chain = [], transcript = '' }, {

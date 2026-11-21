@@ -96,6 +96,10 @@ A repaint of the list moves the audio being listened to, and a title being typed
 
 `clipboard-core.js` turns clipboard text into a context item and nothing more. It has no storage of its own: the item joins `contextChain`, which already decides how context is displayed, fed to the model, exported, retained and deleted. The module is pure, so what a paste becomes is decided without a clipboard, a DOM or a database.
 
+## Copying a recording out
+
+📑 (Build 146) is the way back out. `export-core.js` is pure and builds its two copies and its JSON from a stored recording alone. The copy without replies is `composeFullPrompt` from `reply-core.js`, the prompt `buildBudgetedPrompt` starts from before it shortens anything, so it cannot drift from what 🧠 Reply sends; the copy of everything appends the replies to the same transcript. Thinking is removed in one place (`repliesTo`), which every output goes through. `recording-export.js` owns the box with the three choices and builds both texts before it opens, because a clipboard write in Safari must come from the tap itself, not after a database read. The ZIP is written by `zipFiles` in `backup-core.js`, next to the backup's headers and checksum.
+
 ## Silence is evidence, not failure
 
 A transcription chunk that fails is retried on a bounded schedule before it is recorded as a hole. When a chunk still yields nothing, the client judges the core of the audio it sent, the minute that chunk answers for, without the overlap it shares with its neighbours: a core whose measured peak and RMS are both below the silence thresholds is reported as no speech detected, and one that carried sound is reported as unavailable. Words spoken just after a quiet minute therefore do not make that minute count as sound. Consecutive placeholders of the same kind collapse into the single span they cover, so a quiet half-hour reads as one note rather than thirty. A recording that is entirely silence is a transcript that says so, not a transcription failure.

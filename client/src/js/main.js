@@ -357,6 +357,7 @@ document.getElementById('logsOverlay').onclick = (e) => {
 function activeDialogPanel() {
     if (logsOpen()) return document.getElementById('logsPanel');
     if (document.getElementById('pasteOverlay').classList.contains('open')) return document.getElementById('pastePanel');
+    if (document.getElementById('exportOverlay').classList.contains('open')) return document.getElementById('exportPanel');
     if (document.getElementById('settingsOverlay').classList.contains('open')) return document.getElementById('settingsPanel');
     if (document.getElementById('helpOverlay').classList.contains('open')) return document.getElementById('helpPanel');
     return null;
@@ -366,7 +367,7 @@ document.addEventListener('keydown', event => {
     const panel = activeDialogPanel();
     if (!panel) return;
     if (event.key === 'Escape') {
-        if (panel.id === 'pastePanel') return;
+        if (panel.id === 'pastePanel' || panel.id === 'exportPanel') return;
         event.preventDefault();
         if (panel.id === 'logsPanel') closeLogs();
         else if (panel.id === 'settingsPanel') closeSettings(); else closeHelp();

@@ -24,6 +24,7 @@ import { retentionMs, planRecordRetention, fmtRetentionRemaining, setPinned } fr
 import { isRecordOwnedByLiveTab, isFreshHeartbeat } from './recording-lock.js';
 import { unfinishedRowState, ROW_ACTION_LABELS, liveHolesToFill, keyActivates } from './row-state-core.js';
 import { describeInterruption } from './capture-health-core.js';
+import { openRecordingExport } from './recording-export.js';
 
 const UI = {
     list:    document.getElementById('recordingsList'),
@@ -771,6 +772,12 @@ function buildRecordingItem(rec) {
     const linkBtn = hasTranscripts
         ? `<button class="action-btn btn-link${linked ? ' linked' : ''}" id="btn-link-${rec.id}" data-action="toggleLinkRec" data-rec-id="${rec.id}" data-link-label="${escapeAttr((rec.filename || '').split(' - ')[0])}" title="${linked ? 'Linked (in the link set)' : 'Link (add to the link set)'}" aria-label="${linked ? 'Linked' : 'Link recording'}">${linked ? '✅' : '🔗'}</button>`
         : '';
+    // The fourth button: everything this recording holds as text, context included, to copy or
+    // download for another AI (Build 146).
+    const hasContext = recordingChainLength(rec) > 0;
+    const exportBtn = (hasTranscripts || hasContext)
+        ? `<button class="action-btn btn-export" id="btn-export-${rec.id}" data-action="exportRec" data-rec-id="${rec.id}" aria-haspopup="dialog" title="Copy or download all of this recording's text, its context included, to ask another AI" aria-label="Copy or download all text">📑</button>`
+        : '';
 
     li.innerHTML = `
     <div class="rec-top"><span class="rec-filename" role="button" tabindex="0" data-edit-title data-rec="${rec.id}" title="Click to rename this recording">${safeName}</span><span class="rec-top-tools">${pinBtn}${fmtBadge}</span></div>
@@ -796,6 +803,7 @@ function buildRecordingItem(rec) {
     <button class="action-btn btn-delete" data-action="deleteRec" data-rec-id="${rec.id}" title="Delete this recording and everything in it" aria-label="Delete recording">🗑️</button>
     ${continueBtn}
     ${linkBtn}
+    ${exportBtn}
     </div>
     ${contextChainHtml}
     ${captureWarningHtml}
@@ -856,6 +864,10 @@ const _expandedChains = new Set();
 
 const _selectedTId = new Map();
 const _selectedSId = new Map();
+
+function recordingChainLength(rec) {
+    return rec.contextChain ? rec.contextChain.length : (rec.context ? 1 : 0);
+}
 
 function buildContextChainHtml(rec) {
     const chain = rec.contextChain ? rec.contextChain : rec.context ? [rec.context] : [];
@@ -1525,6 +1537,8 @@ export function wireActionDelegation() {
             case 'convertRecFormat': return window.convertRecFormat(recId);
             case 'continueConv': return window.continueConv(recId);
             case 'toggleLinkRec': return window.toggleLinkRec(recId, el.dataset.linkLabel || '');
+            case 'exportRec': return openRecordingExport(recId, {
+                transcriptId: document.getElementById(`drop-t-${recId}`)?.value || null, returnFocus: el });
             case 'pinRec': return window.pinRec(recId, el.dataset.pin === '1');
             case 'dismissCaptureWarning': return window.dismissCaptureWarning(recId);
             case 'dismissInterruption': return window.dismissInterruption(recId);

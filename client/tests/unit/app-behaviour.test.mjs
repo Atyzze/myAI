@@ -817,6 +817,111 @@ function zipEntries(bytes) {
     ok(!document.getElementById('logsOverlay').classList.contains('open'), 'system log: ✕ closes it');
 }
 
+// 📑, the fourth button under a recording: a first tap asks which of three, and only the choice
+// copies or downloads (Build 146).
+{
+    await clearAll();
+    const gui = await import('../../src/js/gui.js');
+    const { openRecordingExport, recordingExportOpen } = await import('../../src/js/recording-export.js');
+    const { buildRecordingCopy } = await import('../../src/js/export-core.js');
+    localStorage.setItem('set-ai-instructions', 'Answer briefly.');
+    const id = await addRecording({
+        filename: '2026-11-21 17:30 - kitchen', title: 'Kitchen plans',
+        contextChain: [
+            { inputText: 'last week I said', outputText: 'last week the AI said',
+              text: '[User Scribe Input]: last week I said\n[AI Summary/Reply Output]: last week the AI said\n',
+              label: 'Continued from: 2026-11-14 10:00 (T1 S1)', srcTimestamp: '2026-11-14 10:00', sourceRecId: 1 },
+            { inputText: 'a pasted article', outputText: '', text: '[Pasted Note]: a pasted article\n',
+              label: 'Pasted: 2026-11-21 17:00', pasted: true, sourceRecId: null }
+        ],
+        transcripts: [{ id: 't1', source: 'S', text: '[00:01] what shall we do with the kitchen', plain: 'what shall we do with the kitchen', time: Date.now() }],
+        summaries: [{ id: 's1', transcriptId: 't1', text: 'Paint it green.', model: 'qwen3:8b', time: Date.now(),
+                      thinking: 'they asked about the kitchen, so I will mull it over' }]
+    });
+    const onlyContext = await addRecording({ filename: 'only a paste',
+        contextChain: [{ inputText: 'pasted alone', outputText: '', text: '[Pasted Note]: pasted alone\n', label: 'Pasted: now', pasted: true }] });
+    const empty = await addRecording({ filename: 'nothing yet' });
+    await gui.renderList({ force: true });
+    await settle();
+    const walk = node => [node, ...((node && node.children) || []).flatMap(walk)];
+    const rowHtml = recId => (walk(document.getElementById('recordingsList')).find(node => node && node.id === `rec-${recId}`) || {}).innerHTML || '';
+    const bottomActions = recId => [...((rowHtml(recId).match(/<div class="bottom-actions"[\s\S]*?<\/div>/) || [''])[0])
+        .matchAll(/data-action="([^"]+)"/g)].map(match => match[1]);
+    eq(bottomActions(id).join(' '), 'deleteRec continueConv toggleLinkRec exportRec',
+       'export: a recording with text has four buttons at the bottom, 📑 the fourth');
+    ok(/id="btn-export-\d+"[^>]*>📑<\/button>/.test(rowHtml(id)), 'export: and the fourth is 📑');
+    eq(bottomActions(onlyContext).join(' '), 'deleteRec exportRec', 'export: a recording that only carries context can still copy it');
+    eq(bottomActions(empty).join(' '), 'deleteRec', 'export: a recording with no text at all has nothing to copy');
+
+    const copied = [];
+    const realWrite = navigator.clipboard.writeText;
+    navigator.clipboard.writeText = async text => { copied.push(String(text)); };
+    const overlay = document.getElementById('exportOverlay');
+    const rec = await row(id);
+    const instructions = 'Answer briefly.';
+
+    let asked = openRecordingExport(id, { transcriptId: 't1' });
+    await settle();
+    ok(overlay.classList.contains('open') && recordingExportOpen() && copied.length === 0,
+       'export: the first tap opens the three choices and copies nothing yet');
+    ok(/Context, transcript and the AI reply, without the AI's thinking · /.test(document.getElementById('exportCopyAllInfo').textContent)
+       && /exactly what the AI was given/.test(document.getElementById('exportCopyUserInfo').textContent)
+       && /structured JSON/.test(document.getElementById('exportZipInfo').textContent)
+       && /Kitchen plans · 3 context items/.test(document.getElementById('exportHint').textContent),
+       'export: each choice says what it takes, and the box names the recording and counts its context as the row does');
+    document.getElementById('exportCopyAll').onclick();
+    eq(JSON.stringify(await asked), '{"choice":"all","ok":true}', 'export: 📋 Copy everything copies');
+    eq(JSON.stringify(copied), JSON.stringify([buildRecordingCopy(rec, { instructions, transcriptId: 't1' })]), 'export: context, transcript and replies, in one go');
+    ok(copied[0].includes('last week the AI said') && copied[0].includes('a pasted article')
+       && copied[0].includes('what shall we do with the kitchen') && copied[0].includes('Paint it green.')
+       && !copied[0].includes('mull it over'),
+       'export: every context item, the transcript and the reply, never the thinking');
+    ok(!overlay.classList.contains('open') && !recordingExportOpen(), 'export: and the box closes');
+
+    asked = openRecordingExport(id, { transcriptId: 't1' });
+    await settle();
+    document.getElementById('exportCopyUser').onclick();
+    eq(JSON.stringify(await asked), '{"choice":"user","ok":true}', 'export: 🎤 Copy without AI replies copies');
+    eq(copied[1], buildRecordingCopy(rec, { instructions, transcriptId: 't1', withReplies: false }),
+       'export: the context and the transcript');
+    ok(copied[1].includes('last week the AI said') && !copied[1].includes('Paint it green.'),
+       'export: keeping the context items whole but leaving this recording\'s replies out');
+
+    asked = openRecordingExport(id, { transcriptId: 't1' });
+    await settle();
+    document.getElementById('exportCancel').onclick();
+    eq(await asked, null, 'export: Cancel closes the box');
+    eq(copied.length, 2, 'export: having copied nothing');
+
+    asked = openRecordingExport(id, { transcriptId: 't1' });
+    await settle();
+    document.getElementById('exportZip').onclick();
+    eq(JSON.stringify(await asked), '{"choice":"zip","ok":true}', 'export: 📦 Download .zip downloads');
+    const download = page.downloads.at(-1);
+    eq(download && download.name, 'Kitchen plans.zip', 'export: a ZIP named after the recording');
+    const entries = zipEntries(new Uint8Array(await download.blob.arrayBuffer()));
+    eq([...entries.keys()].join(), 'recording.json', 'export: holding recording.json');
+    const data = JSON.parse(new TextDecoder().decode(entries.get('recording.json')));
+    ok(data.format === 'myai-recording' && data.context.length === 2 && data.transcripts.length === 1
+       && data.replies.length === 1 && data.replies[0].text === 'Paint it green.' && data.aiInstructions === instructions
+       && !JSON.stringify(data).includes('mull it over'),
+       `export: the recording as structured JSON: its context, transcripts and replies, without the thinking (${JSON.stringify(data).slice(0, 200)})`);
+    eq(copied.length, 2, 'export: and the clipboard was left alone');
+
+    const listeners = {};
+    const realAdd = document.addEventListener;
+    document.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
+    gui.wireActionDelegation();
+    document.addEventListener = realAdd;
+    const tapped = { dataset: { action: 'exportRec', recId: String(id) }, focus() {} };
+    for (const fn of listeners.click || []) fn({ target: { closest: () => tapped } });
+    await settle();
+    ok(recordingExportOpen() && overlay.classList.contains('open') && copied.length === 2,
+       'export: a tap on the row\'s 📑 opens the choices through the app\'s own buttons, and copies nothing yet');
+    document.getElementById('exportCancel').onclick();
+    navigator.clipboard.writeText = realWrite;
+}
+
 await clearAll();
 memoryIdb.reset();
 console.log(`✓ all ${assertions} app-behaviour assertions passed`);
