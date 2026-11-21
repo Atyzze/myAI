@@ -1,8 +1,8 @@
-import { applyStopFlags, noteRecordingEnded, markFinalized, markSaveFailed } from './finalize-core.js';
+import { applyStopFlags, noteRecordingEnded, markFinalized, markSaveFailed, beginSave, saveCrashes } from './finalize-core.js';
 import { CONFIG, fmtDur, fmtBytes, getLocalIso, getSetting, readStored, writeStored } from './config.js';
 import { dbExec, dbUpdate, calcTotalStorage, bumpStorage, getUnfinishedRecordings,
          getAudioFragmentsForRecording, deleteAudioFragments,
-         commitAudio, writeLiveTranscript, deleteLiveTranscript,
+         commitAudio, blobWithOwnBytes, writeLiveTranscript, deleteLiveTranscript,
          writeCaptureBeat, readCaptureBeats, deleteCaptureBeat } from './db.js';
 import { encodeMonoWav, getWorkletCode, stitchWavChunks, planPcmFlush,
          wavDataBytesFor, WAV_MAX_DATA_BYTES } from './audio.js';
@@ -949,9 +949,41 @@ async function releaseFinalizer(recId, finalizerId) {
     });
 }
 
+// Each step of a save is written to the system log, and on disk, before it begins (Build 145), so
+// a browser that dies during a save leaves the step it died in. The wait is at most a moment.
+function savingStep(recId, what) {
+    logEvent('save', `recording ${recId}: ${what}`);
+    return flushSystemLog();
+}
+
+// Counts a save on its recording before it begins (see beginSave in finalize-core.js). Returns the
+// row as it now stands, which says saveHalted when an automatic save must not go ahead; null when
+// the recording is gone or another finalizer owns it; undefined when the count could not be
+// written (a full disk, say), and then the save goes ahead uncounted, as it did before.
+async function noteSaveBegun(recId, { finalizerId = null, automatic = true } = {}) {
+    try {
+        return await dbUpdate(CONFIG.STORE_REC, recId, rec => {
+            if (!rec || !rec.processing || (finalizerId && rec.finalizerId !== finalizerId)) return null;
+            return beginSave(rec, { limit: CONFIG.SAVE_CRASH_LIMIT, automatic });
+        });
+    } catch (err) {
+        console.warn(`Could not count this save on recording ${recId}; it goes ahead uncounted:`, err);
+        return undefined;
+    }
+}
+
+function piecesBytes(chunks) {
+    return chunks.reduce((sum, chunk) => sum + (chunk.blob?.size || 0), 0);
+}
+
+function piecesNote(chunks) {
+    return `${chunks.length} piece${chunks.length === 1 ? '' : 's'}`;
+}
+
 async function finalizeWavBackup(recId, durationMs, { runPipeline = true, finalizerId = null, stopFlags = null } = {}) {
     const rec0 = await dbExec(CONFIG.STORE_REC, 'get', recId);
     if (!rec0) return;
+    await savingStep(recId, 'reading the pieces');
     const rawChunks = await getAudioFragmentsForRecording(recId);
     const chunks = chunksForRecordingSession(rawChunks, rec0);
 
@@ -973,8 +1005,10 @@ async function finalizeWavBackup(recId, durationMs, { runPipeline = true, finali
         ? Math.round((dataBytes / 2 / sampleRate) * 1000)
         : 0;
     const effectiveDuration = derivedDuration || durationMs || rec0.durationMs || 0;
+    await savingStep(recId, `joining ${piecesNote(chunks)} (${fmtBytes(piecesBytes(chunks))})`);
     const masterBlob = stitchWavChunks(chunks.map(chunk => chunk.blob), sampleRate);
 
+    await savingStep(recId, `writing the recording (${fmtBytes(masterBlob.size)})`);
     const stored = await commitAudio(recId, masterBlob, rec => {
         if (!rec || (finalizerId && rec.finalizerId !== finalizerId)) return null;
         rec.audioBytes = masterBlob.size;
@@ -985,14 +1019,20 @@ async function finalizeWavBackup(recId, durationMs, { runPipeline = true, finali
         return;
     }
 
+    await savingStep(recId, `removing the ${piecesNote(chunks)}`);
     await deleteRecordingSessionChunks(recId, rec0.sessionId);
+    logEvent('save', `recording ${recId}: saved`);
     await calcTotalStorage();
     if (runPipeline) await runAutoPipeline(recId);
 }
 
-async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, finalizerId = null, stopFlags = null } = {}) {
+// plain: put the pieces together and nothing more, without indexing the file for seeking (done
+// later, when the recording is downloaded). Used when saving it has taken the browser down before.
+async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, finalizerId = null, stopFlags = null,
+                                                       plain = false } = {}) {
     const rec0 = await dbExec(CONFIG.STORE_REC, 'get', recId);
     if (!rec0) return;
+    await savingStep(recId, 'reading the pieces');
     const rawChunks = await getAudioFragmentsForRecording(recId);
     const chunks = chunksForRecordingSession(rawChunks, rec0);
     if (!chunks || chunks.length === 0) {
@@ -1005,7 +1045,11 @@ async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, final
     }
     chunks.sort((a, b) => a.seq - b.seq);
     await ensureFinalizationHeadroom(chunks);
-    const rawMaster = new Blob(chunks.map(chunk => chunk.blob), { type: mime || 'audio/webm' });
+    // The pieces are read into memory and joined there (Build 145): everything after works on that
+    // copy, and what is written is a plain file, not one made of the stored pieces.
+    await savingStep(recId, `joining ${piecesNote(chunks)} (${fmtBytes(piecesBytes(chunks))}) in memory`);
+    const rawMaster = await blobWithOwnBytes(new Blob(chunks.map(chunk => chunk.blob), { type: mime || 'audio/webm' }));
+    await savingStep(recId, 'measuring');
     let fileMs = null;
     try { fileMs = await webmAudioEndMs(rawMaster); } catch (_) { fileMs = null; }
     const effectiveDuration = opusLengthMs({
@@ -1016,16 +1060,22 @@ async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, final
     });
     let masterBlob = rawMaster;
     let remuxError = null;
-    try {
-        masterBlob = await makeWebmSeekable(rawMaster, effectiveDuration);
-    } catch (err) {
-        console.warn('WebM remux failed; committing the unremuxed master and leaving it upgradable:', err);
-        masterBlob = rawMaster;
-        remuxError = err && err.message ? err.message : String(err);
+    if (plain) {
+        logEvent('save', `recording ${recId}: left unindexed, since saving it closed the browser before`);
+    } else {
+        await savingStep(recId, 'indexing for seeking');
+        try {
+            masterBlob = await makeWebmSeekable(rawMaster, effectiveDuration);
+        } catch (err) {
+            console.warn('WebM remux failed; committing the unremuxed master and leaving it upgradable:', err);
+            masterBlob = rawMaster;
+            remuxError = err && err.message ? err.message : String(err);
+        }
     }
     const webmSeekable = masterBlob !== rawMaster
         && String(masterBlob.type || mime || '').toLowerCase().includes('webm');
 
+    await savingStep(recId, `writing the recording (${fmtBytes(masterBlob.size)})`);
     const stored = await commitAudio(recId, masterBlob, (rec) => {
         if (!rec || (finalizerId && rec.finalizerId !== finalizerId)) return null;
         rec.audioBytes = masterBlob.size;
@@ -1041,7 +1091,9 @@ async function finalizeOpus(recId, durationMs, mime, { runPipeline = true, final
         return;
     }
 
+    await savingStep(recId, `removing the ${piecesNote(chunks)}`);
     await deleteRecordingSessionChunks(recId, rec0.sessionId);
+    logEvent('save', `recording ${recId}: saved`);
     await calcTotalStorage();
     if (runPipeline) await runAutoPipeline(recId);
 }
@@ -1072,12 +1124,19 @@ export async function retryFinalizeRecording(recId) {
             delete cur.finalizationError;
             return cur;
         });
+        // A retry by hand always goes ahead, and is counted like any save. After the browser has
+        // died saving this recording, it takes the plainest way.
+        const crashedBefore = saveCrashes(rec) >= CONFIG.SAVE_CRASH_LIMIT || !!rec.saveHalted;
+        if (await noteSaveBegun(recId, { finalizerId, automatic: false }) === null) {
+            throw new Error('This recording is already being finalized or deleted in another tab.');
+        }
+        logEvent('save', `recording ${recId}: saving again by hand${crashedBefore ? ', the plainest way' : ''}`);
         heartbeat = setInterval(
             () => touchFinalizer(recId, finalizerId).catch(() => {}),
             CONFIG.RECORDING_HEARTBEAT_MS
         );
         await _renderList();
-        await finalizeRecording(recId, rec.durationMs || 0, { runPipeline: false, finalizerId });
+        await finalizeRecording(recId, rec.durationMs || 0, { runPipeline: false, finalizerId, plain: crashedBefore });
         try { await storeLiveTranscript(recId); }
         catch (liveErr) { console.warn('Could not keep the live transcript after retrying finalization:', liveErr); }
     } catch (err) {
@@ -1130,8 +1189,9 @@ async function absorbCaptureBeat(recId, beat, fallbackMs) {
 }
 
 export async function recoverIncompleteRecordings({ retryFailed = true } = {}) {
+    // A recording whose saving took the browser down too often is left for the person to retry.
     const pending = (await getUnfinishedRecordings())
-        .filter(rec => !rec.deleting && (retryFailed || rec.captureState !== 'finalize-error'));
+        .filter(rec => !rec.deleting && !rec.saveHalted && (retryFailed || rec.captureState !== 'finalize-error'));
     if (pending.length === 0) return { recovered: 0, deferred: 0 };
 
     const locked = await acquireRecordingLock();
@@ -1167,13 +1227,27 @@ export async function recoverIncompleteRecordings({ retryFailed = true } = {}) {
             logEvent('recovery', `recovering recording ${rec.id} (${rec.captureState}, beat ${beat ? `${beat.state}${beat.stopStep ? ` at ${beat.stopStep}` : ''}` : 'none'}`
                 + `${otherTabsGone ? ', no other tab holds the lock' : ''})`);
             rec.durationMs = await absorbCaptureBeat(rec.id, beat, rec.durationMs || 0);
+            const begun = await noteSaveBegun(rec.id, { finalizerId, automatic: true });
+            if (begun === null || (begun && begun.saveHalted)) {
+                if (begun && begun.saveHalted) {
+                    logEvent('recovery', `recording ${rec.id} not saved again by itself: saving it closed the browser `
+                        + `${saveCrashes(begun)} times; its row offers Retry, the audio saved so far and Delete`, 'warn');
+                    deleteCaptureBeat(rec.id).catch(() => {});
+                } else {
+                    await releaseFinalizer(rec.id, finalizerId).catch(() => {});
+                }
+                deferred++;
+                continue;
+            }
+            // Once the browser has died saving this recording, the next try takes the plainest way.
+            const plain = saveCrashes(rec) >= 1;
             let heartbeat = setInterval(
                 () => touchFinalizer(rec.id, finalizerId).catch(() => {}),
                 CONFIG.RECORDING_HEARTBEAT_MS
             );
             let settled = false;
             try {
-                await finalizeRecording(rec.id, rec.durationMs || 0, { runPipeline: false, finalizerId });
+                await finalizeRecording(rec.id, rec.durationMs || 0, { runPipeline: false, finalizerId, plain });
                 settled = true;
                 try { await storeLiveTranscript(rec.id); }
                 catch (liveErr) { console.warn('Could not keep the live transcript of a recovered recording:', liveErr); }
@@ -1596,6 +1670,7 @@ async function stopRecordingNow() {
         await _renderList();
         mark('first repaint');
         await reachStep('saving');
+        await noteSaveBegun(currentId, { automatic: false });
         await finalizeRecording(currentId, finalDuration, { runPipeline: false, stopFlags });
         rowSettled = true;
         mark('master blob');

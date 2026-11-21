@@ -2221,6 +2221,42 @@
       "mutationGuards": [
         "MUT-SWITCH-STORES-CHECKBOX-VALUE"
       ]
+    },
+    {
+      "id": "SAVE-CRASH-001",
+      "title": "A save is counted on its recording before it begins and its count goes when it ends; a recording whose save the browser died during twice is no longer saved by itself at every launch but keeps all its pieces and offers Retry, the audio saved so far and Delete; a save after a crash takes the plainest way; audio of any length is written as a plain in-memory copy, read a slice at a time; and every step of a save and of a transcription is in the system log, on disk before it begins",
+      "suites": [
+        "storage-paths",
+        "pure",
+        "saved-transcripts"
+      ],
+      "mutationGuards": [
+        "MUT-SAVE-UNCOUNTED",
+        "MUT-SAVE-COUNT-STAYS",
+        "MUT-CRASH-LOOP-UNGUARDED",
+        "MUT-CRASH-LOOP-HALT-IGNORED",
+        "MUT-CRASH-LOOP-RETRIED-AT-LAUNCH",
+        "MUT-CRASH-RECOVERY-NOT-PLAIN",
+        "MUT-CRASH-RETRY-NOT-PLAIN",
+        "MUT-AUDIO-OWN-BYTES-SKIPPED",
+        "MUT-AUDIO-COPY-WHOLE",
+        "MUT-AUDIO-COPY-CAPPED",
+        "MUT-SAVE-STEP-UNFLUSHED",
+        "MUT-SAVE-STEP-UNLOGGED",
+        "MUT-TRANSCRIBE-UNLOGGED",
+        "MUT-TRANSCRIBE-PLAN-UNFLUSHED"
+      ]
+    },
+    {
+      "id": "REPLY-THINKING-SPEED-001",
+      "title": "While a model reasons, the reply view shows its tokens per second as well as its token count, from its first tokens on, also in a view opened mid-reasoning",
+      "suites": [
+        "live-view-unit"
+      ],
+      "mutationGuards": [
+        "MUT-THINKING-SPEED-HIDDEN",
+        "MUT-THINKING-UNTIMED"
+      ]
     }
   ],
   "untestedModules": []

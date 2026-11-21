@@ -1,3 +1,4 @@
+import { logEvent, flushSystemLog } from './debug-log.js';
 import { CONFIG, fmtDur, getSetting, uid, confirmServerProcessing } from './config.js';
 import { translateLines }                      from './reply.js';
 import { dbExec, dbUpdate, readAudio, readLiveTranscript, updateLiveTranscript } from './db.js';
@@ -246,6 +247,7 @@ export async function transcribePlannedChunks(recId, chunks, loadAudio,
     const totalChunks = chunks.length;
     liveLogAppend(recId, `📦 ${totalChunks} chunks - 60 s steps, ±3 s overlap; ${Math.min(POOL_START, concurrency)} at a time `
         + `to start, up to ${concurrency} while the server keeps up`);
+    await flushSystemLog();
     progressCallback(`0% - dispatching ${totalChunks} chunks`);
 
     const results = new Array(totalChunks).fill(null);
@@ -416,6 +418,8 @@ export async function transcribeChunked(recId, progressCallback, { reuseLive = t
     let rec = null;
     let audioBlob = null;
     try {
+        logEvent('transcribe', `recording ${recId}: reading the audio`);
+        await flushSystemLog();
         rec = await dbExec(CONFIG.STORE_REC, 'get', recId);
         audioBlob = rec ? await readAudio(recId) : null;
         if (!rec || !audioBlob) throw new Error('Audio blob missing.');
@@ -437,6 +441,7 @@ export async function transcribeChunked(recId, progressCallback, { reuseLive = t
     try {
         const durationMin = ((rec.durationMs || 0) / 60000).toFixed(1);
         liveLogAppend(recId, `▶️ Starting server transcription - ${durationMin} min recording`);
+        await flushSystemLog();
 
         const storedLive = await readLiveTranscript(recId);
         const live = reuseLive ? storedLive : null;

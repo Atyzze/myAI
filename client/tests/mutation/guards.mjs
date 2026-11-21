@@ -154,8 +154,8 @@ export const mutations = [
     {
         id: 'MUT-STREAM-REINIT-REPLACE',
         file: 'src/js/live-tabs.js',
-        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\',\n                      done: false, end: null })\n         .generation;',
-        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\', done: false, end: null, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
+        from: '  return resetEntry(_replyStreams, _replyStreamOrder, recId,\n                    { tokens: \'\', count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\',\n                      thinkingFirstAt: 0, thinkingLastAt: 0, done: false, end: null })\n         .generation;',
+        to: '  _replyStreams[recId] = { tokens: \'\', listeners: [], count: 0, firstAt: 0, lastAt: 0, model: \'\', thinking: 0, thinkingText: \'\', thinkingFirstAt: 0, thinkingLastAt: 0, done: false, end: null, generation: 1 };\n  _touchEvict(_replyStreams, _replyStreamOrder, recId);\n  return _replyStreams[recId].generation;',
         command: ['node', 'tests/unit/live-view.test.mjs'],
         expected: /tokens still reach a popup opened before the stream was re-initialised/
     },
@@ -4021,5 +4021,133 @@ export const mutations = [
         to: '    return el.value;\n',
         command: ['node', 'tests/unit/app-behaviour.test.mjs'],
         expected: /a switch shows a stored value as on, and stores it back as that value/
+    },
+    {
+        id: 'MUT-SAVE-UNCOUNTED',
+        file: 'src/js/recorder.js',
+        from: '        await noteSaveBegun(currentId, { automatic: false });\n',
+        to: '',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /Stop counts its save on the recording before it begins/
+    },
+    {
+        id: 'MUT-SAVE-COUNT-STAYS',
+        file: 'src/js/finalize-core.js',
+        from: '    delete rec.finalizerHeartbeatAt;\n    delete rec.saveAttempts;\n    delete rec.saveHalted;\n    return rec;\n}\n\n// A recording whose save failed',
+        to: '    delete rec.finalizerHeartbeatAt;\n    return rec;\n}\n\n// A recording whose save failed',
+        command: ['node', 'tests/unit/pure.test.mjs'],
+        expected: /a save that ends, saved or failed, takes its count away/
+    },
+    {
+        id: 'MUT-CRASH-LOOP-UNGUARDED',
+        file: 'src/js/finalize-core.js',
+        from: '    if (automatic && (rec.saveHalted || crashes >= limit)) return markSaveHalted(rec, { crashes, now });\n',
+        to: '',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /one whose save took the browser down twice is not saved again by itself/
+    },
+    {
+        id: 'MUT-CRASH-LOOP-HALT-IGNORED',
+        file: 'src/js/recorder.js',
+        from: '            if (begun === null || (begun && begun.saveHalted)) {',
+        to: '            if (begun === null) {',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /one whose save took the browser down twice is not saved again by itself/
+    },
+    {
+        id: 'MUT-CRASH-LOOP-RETRIED-AT-LAUNCH',
+        file: 'src/js/recorder.js',
+        from: "        .filter(rec => !rec.deleting && !rec.saveHalted && (retryFailed || rec.captureState !== 'finalize-error'));",
+        to: "        .filter(rec => !rec.deleting && (retryFailed || rec.captureState !== 'finalize-error'));",
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the next launch, which retries failed saves, leaves it alone too/
+    },
+    {
+        id: 'MUT-CRASH-RECOVERY-NOT-PLAIN',
+        file: 'src/js/recorder.js',
+        from: '            const plain = saveCrashes(rec) >= 1;',
+        to: '            const plain = false;',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the plainest way, left unindexed for seeking until it is downloaded/
+    },
+    {
+        id: 'MUT-CRASH-RETRY-NOT-PLAIN',
+        file: 'src/js/recorder.js',
+        from: '{ runPipeline: false, finalizerId, plain: crashedBefore }',
+        to: '{ runPipeline: false, finalizerId, plain: false }',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the plainest way, without indexing it for seeking/
+    },
+    {
+        id: 'MUT-AUDIO-OWN-BYTES-SKIPPED',
+        file: 'src/js/db.js',
+        from: '    blob = await blobWithOwnBytes(blob);\n',
+        to: '',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /audio is read into memory before it is written/
+    },
+    {
+        id: 'MUT-AUDIO-COPY-WHOLE',
+        file: 'src/js/db.js',
+        from: '    const step = Math.max(1, CONFIG.AUDIO_COPY_SLICE_BYTES);',
+        to: '    const step = Math.max(1, blob.size);',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /a recording of any length is copied too, a slice at a time/
+    },
+    {
+        id: 'MUT-AUDIO-COPY-CAPPED',
+        file: 'src/js/db.js',
+        from: "    if (!blob || typeof blob.slice !== 'function') return blob;",
+        to: "    if (!blob || typeof blob.slice !== 'function' || blob.size > 8) return blob;",
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /a recording of any length is copied too, a slice at a time/
+    },
+    {
+        id: 'MUT-SAVE-STEP-UNFLUSHED',
+        file: 'src/js/recorder.js',
+        from: "    logEvent('save', `recording ${recId}: ${what}`);\n    return flushSystemLog();",
+        to: "    logEvent('save', `recording ${recId}: ${what}`);\n    return Promise.resolve();",
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /each step is on disk before it begins/
+    },
+    {
+        id: 'MUT-SAVE-STEP-UNLOGGED',
+        file: 'src/js/recorder.js',
+        from: "    logEvent('save', `recording ${recId}: ${what}`);\n    return flushSystemLog();",
+        to: '    return flushSystemLog();',
+        command: ['node', 'tests/unit/storage-paths.test.mjs'],
+        expected: /the system log holds each step of saving a WAV recording/
+    },
+    {
+        id: 'MUT-TRANSCRIBE-UNLOGGED',
+        file: 'src/js/live-tabs.js',
+        from: "  logEvent('transcribe', `recording ${recId}: ${line}`);\n",
+        to: '',
+        command: ['node', 'tests/unit/saved-transcripts.test.mjs'],
+        expected: /the system log holds the transcription's progress/
+    },
+    {
+        id: 'MUT-TRANSCRIBE-PLAN-UNFLUSHED',
+        file: 'src/js/transcribe.js',
+        from: "        + `to start, up to ${concurrency} while the server keeps up`);\n    await flushSystemLog();\n",
+        to: "        + `to start, up to ${concurrency} while the server keeps up`);\n",
+        command: ['node', 'tests/unit/saved-transcripts.test.mjs'],
+        expected: /its first steps are on disk before the first chunk is sent/
+    },
+    {
+        id: 'MUT-THINKING-SPEED-HIDDEN',
+        file: 'src/js/live-render.js',
+        from: '                    setText(footerEl, thinkingLine());',
+        to: '                    setText(footerEl, `${thinkingCount} thinking tok`);',
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /while the model reasons, its speed shows as well/
+    },
+    {
+        id: 'MUT-THINKING-UNTIMED',
+        file: 'src/js/live-tabs.js',
+        from: "fn({ type: 'thinking', count: entry.thinking, text: piece, elapsedMs })",
+        to: "fn({ type: 'thinking', count: entry.thinking, text: piece })",
+        command: ['node', 'tests/unit/live-view.test.mjs'],
+        expected: /each piece of reasoning says how long the model has been reasoning/
     },
 ];

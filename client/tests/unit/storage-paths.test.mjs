@@ -586,6 +586,134 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     await lock.releaseRecordingLock();
 }
 
+// Build 145: each save is counted on its recording before it begins and logged step by step, on
+// disk, so a browser that dies during one leaves behind that it did and where; a recording whose
+// save took the browser down twice is no longer saved by itself at every launch.
+const debugLog = await import('../../src/js/debug-log.js');
+const saveSteps = async id => {
+    await debugLog.flushSystemLog(2000);
+    const prefix = `recording ${id}: `;
+    return memoryIdb.rows('entries', debugLog.LOG_DB_NAME)
+        .filter(entry => entry.c === 'save' && entry.m.startsWith(prefix)).map(entry => entry.m.slice(prefix.length));
+};
+const inOrder = (steps, patterns) => steps.length === patterns.length && patterns.every((pattern, i) => pattern.test(steps[i]));
+const opusPieces = () => [{ seq: 0, blob: new Blob([syntheticWebm({ clusterTimes: [0, 4000, 8000] }).bytes], { type: 'audio/webm;codecs=opus' }) }];
+const unfinishedOpus = (fields = {}) => addRecording({ format: 'opus', mime: 'audio/webm;codecs=opus', processing: true,
+                                                       captureState: 'finalizing', ownerId: 'a-tab-that-died', sessionId: 's-crash',
+                                                       heartbeatAt: Date.now() - 10 * MINUTE, durationMs: 12000, ...fields },
+                                                     { fragments: opusPieces() });
+
+{
+    await debugLog.installSystemLog({ build: 'test' });
+    let loggedAtWrite = null;
+    const watchAudioWrite = op => {
+        if (loggedAtWrite === null && op.store === 'audio' && op.action === 'put') {
+            loggedAtWrite = memoryIdb.rows('entries', debugLog.LOG_DB_NAME).filter(entry => entry.c === 'save').map(entry => entry.m);
+        }
+        return false;
+    };
+    const { id, beforeSaved } = await stopRecordingWith({ commitDelayMs: 150, failing: watchAudioWrite });
+    ok(beforeSaved && beforeSaved.saveAttempts === 1,
+       `save count: Stop counts its save on the recording before it begins, so a browser that dies during it leaves that behind (${beforeSaved && beforeSaved.saveAttempts})`);
+    const saved = await row(id);
+    ok(saved && !saved.processing && !('saveAttempts' in saved) && !('saveHalted' in saved),
+       'save count: and the count goes with the save that ends');
+    const steps = await saveSteps(id);
+    ok(inOrder(steps, [/^reading the pieces$/, /^joining 3 pieces \(\d/, /^writing the recording \(\d/, /^removing the 3 pieces$/, /^saved$/]),
+       `save log: the system log holds each step of saving a WAV recording, in order (${JSON.stringify(steps)})`);
+    ok(loggedAtWrite && loggedAtWrite.some(line => line.startsWith(`recording ${id}: writing the recording (`)),
+       `save log: each step is on disk before it begins, so a browser that dies writing the recording leaves that it was (${JSON.stringify(loggedAtWrite && loggedAtWrite.slice(-3))})`);
+    await lock.releaseRecordingLock();
+    await clearAll();
+}
+
+{
+    const id = await unfinishedOpus();
+    const outcome = await recorder.recoverIncompleteRecordings();
+    const saved = await row(id);
+    ok(outcome.recovered === 1 && saved && !saved.processing && saved.webmSeekableVersion > 0 && !('saveAttempts' in saved),
+       `save count: a recording no save of which took the browser down is recovered as before, indexed for seeking, and keeps no count (${JSON.stringify(outcome)})`);
+    const steps = await saveSteps(id);
+    ok(inOrder(steps, [/^reading the pieces$/, /^joining 1 piece \(.+\) in memory$/, /^measuring$/, /^indexing for seeking$/,
+                       /^writing the recording \(\d/, /^removing the 1 piece$/, /^saved$/]),
+       `save log: and the log holds each step of saving a compressed one, joined in memory (${JSON.stringify(steps)})`);
+    await clearAll();
+}
+
+{
+    const id = await unfinishedOpus({ saveAttempts: 1 });
+    const outcome = await recorder.recoverIncompleteRecordings();
+    const saved = await row(id);
+    ok(outcome.recovered === 1 && saved && !saved.processing && saved.audioBytes > 0 && !!(await db.readAudio(id))
+       && !('saveAttempts' in saved) && (await fragmentsOf(id)) === 0,
+       `crash loop: a recording whose save took the browser down once is saved again by itself, and its count goes (${JSON.stringify(outcome)})`);
+    ok(!saved.webmSeekableVersion && (await saveSteps(id)).includes('left unindexed, since saving it closed the browser before'),
+       'crash loop: the plainest way, left unindexed for seeking until it is downloaded');
+    await clearAll();
+}
+
+{
+    const id = await unfinishedOpus({ saveAttempts: 2 });
+    await db.writeCaptureBeat({ recId: id, ownerId: 'a-tab-that-died', sessionId: 's-crash', heartbeatAt: Date.now() - 10 * MINUTE,
+                                state: 'finalizing', durationMs: 12000, stopStep: 'saving' });
+    const outcome = await recorder.recoverIncompleteRecordings();
+    const halted = await row(id);
+    ok(outcome.recovered === 0 && outcome.deferred === 1 && halted && halted.processing && halted.saveHalted === true
+       && halted.captureState === 'finalize-error' && /closed the browser 2 times/.test(halted.finalizationError || ''),
+       `crash loop: one whose save took the browser down twice is not saved again by itself, and says why (${JSON.stringify(outcome)}, ${halted && halted.finalizationError})`);
+    ok((await fragmentsOf(id)) === 1 && !(await db.readAudio(id)) && !halted.finalizerId && !(await db.readCaptureBeats()).has(id),
+       'crash loop: its pieces are all kept, and no tab holds it any more');
+    const { unfinishedRowState } = await import('../../src/js/row-state-core.js');
+    const state = unfinishedRowState(halted);
+    ok(state.kind === 'save-failed' && ['retryFinalizeRec', 'downloadRecoverableRec', 'deleteRec'].every(action => state.actions.includes(action)),
+       `crash loop: its row offers Retry, the audio saved so far, and Delete (${JSON.stringify(state)})`);
+    const again = await recorder.recoverIncompleteRecordings({ retryFailed: true });
+    const after = await row(id);
+    ok(again.recovered === 0 && again.deferred === 0 && after.saveAttempts === 2 && after.saveHalted && (await fragmentsOf(id)) === 1,
+       `crash loop: the next launch, which retries failed saves, leaves it alone too (${JSON.stringify(again)})`);
+
+    await recorder.retryFinalizeRecording(id);
+    const saved = await row(id);
+    ok(saved && !saved.processing && saved.audioBytes > 0 && !!(await db.readAudio(id)) && (await fragmentsOf(id)) === 0
+       && !('saveAttempts' in saved) && !('saveHalted' in saved) && !saved.finalizationError,
+       'crash loop: Retry by hand still saves it, and it is an ordinary recording again');
+    const steps = await saveSteps(id);
+    ok(steps.includes('saving again by hand, the plainest way') && steps.includes('left unindexed, since saving it closed the browser before')
+       && !steps.includes('indexing for seeking'),
+       `crash loop: the plainest way, without indexing it for seeking (${JSON.stringify(steps)})`);
+    await clearAll();
+}
+
+{
+    // A blob whose reads are watched: how many slices are read, and the largest one.
+    class WatchedBlob extends Blob {
+        slices = [];
+        slice(from, to, type) {
+            this.slices.push(Math.min(this.size, to ?? this.size) - (from ?? 0));
+            return super.slice(from, to, type);
+        }
+    }
+    const bytes = n => Uint8Array.from({ length: n }, (_, i) => (i * 7 + 3) % 256);
+    const id = await addRecording({ format: 'opus', mime: 'audio/webm' });
+    const small = new WatchedBlob([bytes(4)], { type: 'audio/webm' });
+    await db.commitAudio(id, small, rec => { rec.audioBytes = small.size; return rec; });
+    const stored = await db.readAudio(id);
+    ok(small.slices.length === 1 && stored && stored.size === 4 && stored.type === 'audio/webm'
+       && [...new Uint8Array(await stored.arrayBuffer())].join() === [...bytes(4)].join(),
+       `own bytes: audio is read into memory before it is written, so what is stored is a plain file, the same bytes (${small.slices.length} reads)`);
+
+    const step = CONFIG.AUDIO_COPY_SLICE_BYTES;
+    CONFIG.AUDIO_COPY_SLICE_BYTES = 3;
+    const long = new WatchedBlob([bytes(4), bytes(6)], { type: 'audio/webm' });
+    await db.commitAudio(id, long, rec => rec);
+    CONFIG.AUDIO_COPY_SLICE_BYTES = step;
+    const expected = [...bytes(4), ...bytes(6)].join();
+    ok(long.slices.length === 4 && Math.max(...long.slices) <= 3
+       && [...new Uint8Array(await (await db.readAudio(id)).arrayBuffer())].join() === expected,
+       `own bytes: a recording of any length is copied too, a slice at a time, so the page never holds more than one slice; the bytes are the same, in order (${JSON.stringify(long.slices)})`);
+    await clearAll();
+}
+
 await clearAll();
 memoryIdb.reset();
 console.log(`✓ all ${assertions} storage-path assertions passed`);
