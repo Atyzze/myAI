@@ -443,6 +443,13 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
                                                     || (captureError && op.store === 'recordings' && op.action === 'put'),
                                               commitDelayMs);
     page.answer(false);
+    // The row as it stands when Stop has let go of the recording and first repaints the list.
+    // Read there, not by the watcher below: the 'saving' step rewrites the same state a few
+    // milliseconds later, so polling cannot tell whether 'closing' wrote it first.
+    let atFirstRepaint = null;
+    recorder.setRenderList(async () => {
+        if (!atFirstRepaint && recorder.AppState.savingId === id) atFirstRepaint = await row(id);
+    });
     let beforeSaved = null;
     const beatsWhileSaving = [];
     let watching = true;
@@ -465,7 +472,8 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
     await memoryIdb.idle();
     stopFailing();
     await settle();
-    return { id, beforeSaved, beatsWhileSaving };
+    recorder.setRenderList(() => {});
+    return { id, beforeSaved, beatsWhileSaving, atFirstRepaint };
 }
 
 {
@@ -506,9 +514,9 @@ async function stopRecordingWith({ captureError = null, unsaved = false, commitD
 {
     let rowWrites = 0;
     const firstTwoRowWritesFail = op => op.store === 'recordings' && op.action === 'put' && ++rowWrites <= 2;
-    const { id, beforeSaved } = await stopRecordingWith({ commitDelayMs: 150, failing: firstTwoRowWritesFail });
-    ok(beforeSaved && beforeSaved.captureState === 'finalizing' && beforeSaved.durationMs >= 59000,
-       `stop: while it is being saved the recording says so, with its final length, also when noting the stop failed once (${beforeSaved && beforeSaved.captureState}, ${beforeSaved && beforeSaved.durationMs} ms)`);
+    const { id, atFirstRepaint } = await stopRecordingWith({ commitDelayMs: 150, failing: firstTwoRowWritesFail });
+    ok(atFirstRepaint && atFirstRepaint.processing && atFirstRepaint.captureState === 'finalizing' && atFirstRepaint.durationMs >= 59000,
+       `stop: while it is being saved the recording says so, with its final length, also when noting the stop failed once (${atFirstRepaint && atFirstRepaint.captureState}, ${atFirstRepaint && atFirstRepaint.durationMs} ms)`);
     const saved = await row(id);
     ok(saved && !saved.processing && saved.audioBytes > 0, 'stop: and afterwards it is saved with its audio');
     ok(!('blob' in saved) && !!(await db.readAudio(id)),
